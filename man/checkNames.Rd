@@ -10,8 +10,8 @@ Check that trait names correspond with standard labels or CO numbers in
 checkNames(phenoDTfile, crop)
 }
 \arguments{
-\item{phenoDTfile}{The data object structure produced from bioflow which contains data, metadata, modifications and tables of results.}
 \item{crop}{A character string to identify the crop (\code{potato} or \code{sweetpotato}).}
+\item{phenoDTfile}{The data object structure produced from bioflow which contains data, metadata, modifications and tables of results.}
 }
 \details{
 The data frame must use the labels (lower or upper case) listed it \code{?st4gi::check.names.pt} and
@@ -26,7 +26,7 @@ traits with names not recognized.
 ####=========================================####
 data(DT_example)
 
-tmp <- checkNames(phenoDTfile = result, crop = 'potato')
+tmp <- checkNames(crop = 'potato', phenoDTfile = result)
 
 }
 

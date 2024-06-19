@@ -9,12 +9,12 @@
 #         To be implemented later
 # 3. Compute variables? (maybe in some other module, after loading data)
 # 
-# Output options for check consistency:
-# - Only informative (option 2.1):
-#   - list of warnings (ready)
-#   - and visualization (would need modifications or new functions, to be implemented later)
-# - Data modifications (option 2.2) => Tag inconsistencies and then change values to NA or 0
-#                                      To be implemented later
+# Output for check consistency:
+# - A data frame with a list of warnings for inconsistencies found
+# - A data frame, same dimention as fieldbook, with indices to spot the values 
+#   with inconsistencies. This could be used for:
+#   - visualization and
+#   - modifications => Tag inconsistencies and then change values to NA.
 # 
 # Scope: Only inconsistencies as outliers are already detected in the QA module
 #------------------------------------------------------------------------------
@@ -27,14 +27,15 @@
 # 1.2. Renaming (matching old with new names).
 #      Proposal: Use the menu Other functions / Trait Transformations
 # 
-# Process 1.2 will modify the data.
+# Processes 1.1 and 1.2 will modify the data.
 # Options:
 # - Add new traits (columns) with the new names
 # - Add matching list in the metadata table
 #------------------------------------------------------------------------------
 
-checkNames <- function(phenoDTfile, # The data object structure produced from bioflow
-                       crop) {
+checkNames <- function(crop,
+                       phenoDTfile, # The data object structure produced from bioflow
+                       ) {
   
   # Get internal copy of data and convert to short labels
   
@@ -46,7 +47,7 @@ checkNames <- function(phenoDTfile, # The data object structure produced from bi
   if (crop == 'sweetpotato')
     mydata <- suppressWarnings(st4gi::convert.co.sp(mydata, 'co.to.labels'))
   
-  # Check names
+  # Check names (this will change all names to lower letters)
   
   if (crop == 'potato')
     tmp <- st4gi::check.names.pt(mydata)
@@ -61,7 +62,7 @@ checkNames <- function(phenoDTfile, # The data object structure produced from bi
 
 }
 
-matchNames <- function(phenoDTfile, crop) {
+matchNames <- function(crop, phenoDTfile) {
   
   # This should give the option to match column names for traits
   # This should be reactive? produce changes in the checkNames function output?
@@ -79,25 +80,28 @@ matchNames <- function(phenoDTfile, crop) {
 #      This will need modification of the functions to point out specific cells
 #------------------------------------------------------------------------------
 
-checkData <- function(phenoDTfile, # The data.frame output from checkNames
-                      crop, format = 'data.frame') {
-  
+checkData <- function(crop,               # So far only potato and sweetpotato
+                      phenoDTfile,        # The data.frame output from checkNames
+                      f = 0,              # To avoid running outliers' detection
+                      print.text = FALSE  # To avoid printing output
+                      ) { 
+
   # Get internal copy of data after running checkNames and matchNames
   
   mydata <- phenoDTfile
   
   # Run check consistency
-  # Use high number of f to avoid detecting outliers
-  
+
   if (crop == 'potato')
-    output <- suppressWarnings(st4gi::check.data.pt(mydata, f = 100, format))
+    output <- suppressWarnings(st4gi::check.data.pt(mydata, f, print.text = print.text))
   
   if (crop == 'sweetpotato')
-    output <- suppressWarnings(st4gi::check.data.sp(mydata, f = 100, format))
+    output <- suppressWarnings(st4gi::check.data.sp(mydata, f, print.text = print.text))
   
-  # Output could be text or data.frame
-
-  # print(output) # Text output
-  return(output) # Data frame output
+  # Output has 2 components:
+  # $Inconsist.List: a data.frame with a list of all inconsistencies.
+  # $Inconsist.Matrix: a data.frame with the positions in the fieldbook data frame where inconsistencies occur.
+  
+  return(output)
   
 }
