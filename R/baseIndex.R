@@ -2,7 +2,8 @@
 
 baseIndex <- function(
   phenoDTfile,       # input data
-  analysisId,        # analysis from the predictions data
+  analysisId,        # analysis from the predictions data  
+  analysisIdName,    # analysis from the predictions data  
   trait,             # traits to include in the index
   weights            # vector of economic weights
 ) {
@@ -16,11 +17,12 @@ baseIndex <- function(
 
   weights <- as.numeric(weights)
   '%!in%' <- function(x,y)!('%in%'(x,y))
-  if("effectType" %!in% colnames(phenoDTfile$predictions) ){
-    phenoDTfile$predictions$effectType <- "general"
-  }
-  phenoDTfilePred <- phenoDTfile$predictions
+  #if("effectType" %!in% colnames(phenoDTfile$predictions) ){
+  #  phenoDTfile$predictions$effectType <- "general"
+  #}
+  phenoDTfilePred <- phenoDTfile$predictions 
   phenoDTfilePred <- phenoDTfilePred[phenoDTfilePred$analysisId==analysisId,]
+  phenoDTfilePred <- phenoDTfilePred[phenoDTfilePred$effectType=="designation",]
   phenoDTfilePred <- phenoDTfilePred[phenoDTfilePred$trait %in% trait,]
 
   Wide <- reshape(
@@ -66,6 +68,7 @@ baseIndex <- function(
   }))
   predictionsBind <- merge(baseIndex,baseOrigin, by="designation", all.x=TRUE)
   predictionsBind$module <- "indexB"
+  if(length(which(predictionsBind$designation=="."))!=0){predictionsBind=predictionsBind[-which(predictionsBind$designation=="."),]}
   #########################################
   ## update databases
   phenoDTfile$predictions <- rbind(phenoDTfile$predictions,
@@ -79,8 +82,8 @@ baseIndex <- function(
                          value=weights
   )
 
-  phenoDTfile$modeling <- rbind(phenoDTfile$modeling, modeling[,colnames(phenoDTfile$modeling)])
-  newStatus <- data.frame(module="indexB", analysisId=idxAnalysisId)
+  phenoDTfile$modeling <- rbind(phenoDTfile$modeling, modeling[,colnames(phenoDTfile$modeling)])  
+  newStatus <- data.frame(module="indexB", analysisId=idxAnalysisId, analysisIdName= analysisIdName)
   phenoDTfile$status <- rbind(phenoDTfile$status, newStatus[, colnames(phenoDTfile$status)] )
   modeling <- data.frame(module="indexB",
                          analysisId=idxAnalysisId,
