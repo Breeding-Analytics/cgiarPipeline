@@ -1,5 +1,5 @@
 metLMMsolver <- function(
-    phenoDTfile= NULL, analysisId=NULL,
+    phenoDTfile= NULL, analysisId=NULL, analysisIdGeno = NULL, 
     fixedTerm= list("1"),  randomTerm=NULL, expCovariates=NULL,
     envsToInclude=NULL, trait= NULL, traitFamily=NULL, useWeights=TRUE,
     calculateSE=TRUE, heritLB= 0.15,  heritUB= 0.95,
@@ -45,6 +45,7 @@ metLMMsolver <- function(
   if(length(fixedTerm) == 0 | is.null(fixedTerm)){fixedTerm <- "1"}else{fixedTerm <- unique(fixedTerm)}
   traitsForExpCovariates <- unique(phenoDTfile$predictions[which(phenoDTfile$predictions$analysisId %in% analysisId),"trait"])
   if(!is.null(nPC)){if(length(intersect(names(nPC), c("geno","weather","pedigree", traitsForExpCovariates))) == 0){stop("The nPC argument needs to be a named numeric vector with names 'geno', 'weather' and 'pedigree' or traits available.", call. = FALSE)}}
+  
   ##########################################
   ##########################################
   ## EXTRACT POSSIBLE EXPLANATORY COVARIATES AND FORM KERNELS (30 lines)
@@ -59,20 +60,41 @@ metLMMsolver <- function(
     if( any( covars %in% c("genoA","genoAD", "weather","pedigree", traitsForExpCovariates ) ) ){
       if(verbose){message("Checking and calculating kernels requested")}
       ## MARKER KERNEL
-      Markers <- phenoDTfile$data$geno # in form of covariates
+      Markers <- as.matrix(phenoDTfile$data$geno) # in form of covariates
       if(any(c("genoA","genoAD") %in% covars) & !is.null(Markers)){
         classify <- unique(unlist(randomTerm)[which(unlist(expCovariates) %in% c("genoA","genoAD") )])
         # eventually we may have to do a for loop
         if(verbose){message(paste("   Marker kernel for",paste(classify,collapse = " and "), "requested"))}
-        qas <- which( phenoDTfile$status$module == "qaGeno" ); qas <- qas[length(qas)]
-        if(length(qas) > 0){
-          modificationsMarkers <- phenoDTfile$modifications$geno[which(phenoDTfile$modifications$geno$analysisId %in% phenoDTfile$status$analysisId[qas] ),]
-          Markers <- cgiarBase::applyGenoModifications(M=Markers, modifications=modificationsMarkers)
-          if(length(which(is.na(Markers))) > 0){Markers <- apply(Markers,2,sommer::imputev)}
-        }else{
-          missing <- apply(Markers,2,sommer::propMissing)
-          Markers <- apply(Markers[,which(missing < 0.9)],2,sommer::imputev)
-        }
+        if(analysisIdGeno == '' | is.null(analysisIdGeno)){ # user didn't provide a modifications id
+          if(length(which(is.na(Markers))) > 0){stop("Markers have missing data and you have not provided a modifications table to impute the genotype data. Please go to the 'Markers QA/QC' module prior to run a model with genoA or genoAD covariate.", call. = FALSE)}
+        }else{ # user provided a modifications Id
+          if(class(phenoDTfile$data$geno)[1] == "genlight"){
+            theresMatch <- which(as.character(analysisIdGeno) %in% names(phenoDTfile$data$geno_imp))
+          } else{
+            modificationsMarkers <- phenoDTfile$modifications$geno
+            theresMatch <- which(modificationsMarkers$analysisId %in% analysisIdGeno)
+          }
+          
+          if(length(theresMatch) > 0){ # there's a modification file after matching the Id
+            if(class(phenoDTfile$data$geno)[1] == "genlight"){
+              Markers <- as.matrix(phenoDTfile$data$geno_imp[[as.character(analysisIdGeno)]])
+            } else{
+              modificationsMarkers <- modificationsMarkers[theresMatch,]
+              Markers <- cgiarBase::applyGenoModifications(M=Markers, modifications=modificationsMarkers)
+            }
+          }else{ # there's no match of the modification file
+            if(length(which(is.na(Markers))) > 0){stop("Markers have missing data and your Id didn't have a match in the modifications table to impute the genotype data.", call. = FALSE)}
+          }
+        } 
+        # qas <- which( phenoDTfile$status$module == "qaGeno" ); qas <- qas[length(qas)]
+        # if(length(qas) > 0){
+        #   modificationsMarkers <- phenoDTfile$modifications$geno[which(phenoDTfile$modifications$geno$analysisId %in% qas ),]
+        #   Markers <- cgiarBase::applyGenoModifications(M=Markers, modifications=modificationsMarkers)
+        #   # if(length(which(is.na(Markers))) > 0){Markers <- apply(Markers,2,sommer::imputev)}
+        # }else{
+        #   missing <- apply(Markers,2,sommer::propMissing)
+        #   Markers <- apply(Markers[,which(missing < 0.9)],2,sommer::imputev)
+        # }
         if(nPC["geno"] < 0){ # do not include extra individuals
           mydataX <-  phenoDTfile$predictions[which( phenoDTfile$predictions$analysisId %in% analysisId),]
           Markers <- Markers[which(rownames(Markers) %in% unique(mydataX$designation) ), ]
@@ -736,6 +758,7 @@ metLMMsolver <- function(
       phenoDTfile$predictions$effectType <- NA
     }
   }
+  
   phenoDTfile$predictions <- rbind(phenoDTfile$predictions,
                                    predictionsBind[,colnames(phenoDTfile$predictions)])
   newStatus <- data.frame(module="mtaLmms", analysisId=mtaAnalysisId, analysisIdName=NA)
