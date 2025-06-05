@@ -1,11 +1,13 @@
 metLMMsolver <- function(
-    phenoDTfile= NULL, analysisId=NULL, analysisIdGeno = NULL, 
+    phenoDTfile= NULL, analysisId=NULL, analysisIdGeno = NULL,
     fixedTerm= list("1"),  randomTerm=NULL, expCovariates=NULL,
     envsToInclude=NULL, trait= NULL, traitFamily=NULL, useWeights=TRUE,
     calculateSE=TRUE, heritLB= 0.15,  heritUB= 0.95,
     meanLB=0, meanUB=Inf, nPC=NULL,   # subsetVariable=NULL, subsetVariableLevels=NULL,
     maxIters=50,  verbose=TRUE
 ){
+
+  #print(nPC)
   ## THIS FUNCTION PERFORMS A MULT TRIAL ANALYSIS USING LMM SOLVER
   mtaAnalysisId <- as.numeric(Sys.time())
   namesSeq <- function(x){
@@ -29,7 +31,10 @@ metLMMsolver <- function(
   if(is.null(traitFamily)){traitFamily <- rep("quasi(link = 'identity', variance = 'constant')", length(trait))}
   if(!is.null(randomTerm)){
     if(length(randomTerm) == 0){randomTerm <- expCovariates <- NULL}else{
-      randomTerm <- unique(randomTerm)
+      flatCovars <- unlist(expCovariates)
+      if (!"genoD" %in% flatCovars) {
+        randomTerm <- unique(randomTerm)
+      }
       if(is.null(expCovariates)){expCovariates <- randomTerm; expCovariates <- lapply(expCovariates, function(x){rep("none",length(x))})}else{
         if(length(expCovariates) != length(randomTerm)){
           stop("Please ensure that expCovariates and randomTerm arguments have the same length.", call. = FALSE)
@@ -45,7 +50,7 @@ metLMMsolver <- function(
   if(length(fixedTerm) == 0 | is.null(fixedTerm)){fixedTerm <- "1"}else{fixedTerm <- unique(fixedTerm)}
   traitsForExpCovariates <- unique(phenoDTfile$predictions[which(phenoDTfile$predictions$analysisId %in% analysisId),"trait"])
   if(!is.null(nPC)){if(length(intersect(names(nPC), c("geno","weather","pedigree", traitsForExpCovariates))) == 0){stop("The nPC argument needs to be a named numeric vector with names 'geno', 'weather' and 'pedigree' or traits available.", call. = FALSE)}}
-  
+
   ##########################################
   ##########################################
   ## EXTRACT POSSIBLE EXPLANATORY COVARIATES AND FORM KERNELS (30 lines)
@@ -62,7 +67,7 @@ metLMMsolver <- function(
       ## MARKER KERNEL
       Markers <- as.matrix(phenoDTfile$data$geno) # in form of covariates
       if(any(c("genoA","genoAD") %in% covars) & !is.null(Markers)){
-        classify <- unique(unlist(randomTerm)[which(unlist(expCovariates) %in% c("genoA","genoAD") )])
+        classify <- unique(unlist(randomTerm)[which(unlist(expCovariates) %in% c("genoA","genoAD","genoD") )])
         # eventually we may have to do a for loop
         if(verbose){message(paste("   Marker kernel for",paste(classify,collapse = " and "), "requested"))}
         if(analysisIdGeno == '' | is.null(analysisIdGeno)){ # user didn't provide a modifications id
@@ -74,7 +79,7 @@ metLMMsolver <- function(
             modificationsMarkers <- phenoDTfile$modifications$geno
             theresMatch <- which(modificationsMarkers$analysisId %in% analysisIdGeno)
           }
-          
+
           if(length(theresMatch) > 0){ # there's a modification file after matching the Id
             if(class(phenoDTfile$data$geno)[1] == "genlight"){
               Markers <- as.matrix(phenoDTfile$data$geno_imp[[as.character(analysisIdGeno)]])
@@ -85,7 +90,7 @@ metLMMsolver <- function(
           }else{ # there's no match of the modification file
             if(length(which(is.na(Markers))) > 0){stop("Markers have missing data and your Id didn't have a match in the modifications table to impute the genotype data.", call. = FALSE)}
           }
-        } 
+        }
         # qas <- which( phenoDTfile$status$module == "qaGeno" ); qas <- qas[length(qas)]
         # if(length(qas) > 0){
         #   modificationsMarkers <- phenoDTfile$modifications$geno[which(phenoDTfile$modifications$geno$analysisId %in% qas ),]
@@ -102,6 +107,43 @@ metLMMsolver <- function(
         }
         ploidyFactor <- max(Markers)/2
         if("genoA" %in% covars){G <- sommer::A.mat(Markers-ploidyFactor);} # additive model
+        if("genoD" %in% covars){ #Dominance kernel
+          if(ploidyFactor == 1){
+
+            D <- 1-abs(Markers)
+
+            f <- rowSums(D) / ncol(D) #inbreeding fixed eff
+            names(f) <- rownames(Markers)
+
+            D <- sommer::D.mat(D)
+            D <- D + diag(1e-5, ncol(D), ncol(D))
+          }else{ #autopolyploid formula for digenic dominance (Batista et al. 2022)
+
+            ploidy <- ploidyFactor * 2
+
+            dom_matrix = Markers/ploidy
+            dom_matrix = 4*dom_matrix - 4*(dom_matrix*dom_matrix)
+
+            f <- rowSums(dom_matrix) / ncol(dom_matrix) #inbreeding fixed eff
+            names(f) <- rownames(Markers)
+
+            MAF <- colMeans(Markers, na.rm = TRUE) / ploidy
+            tMarkers <- t(Markers)
+
+            C_mat <- matrix(choose(ploidy, 2), nrow = nrow(tMarkers), ncol = ncol(tMarkers))
+            Ploidy_mat <- matrix(ploidy, nrow = nrow(tMarkers), ncol = ncol(tMarkers))
+
+            Q <- (MAF^2 * C_mat) -
+              (Ploidy_mat - 1) * MAF * tMarkers +
+              0.5 * tMarkers * (tMarkers-1)
+
+            D <- crossprod(Q)
+            denomDom <- sum(C_mat[,1]*MAF^2*(1-MAF)^2)
+            D <- D/denomDom
+            D <- D + diag(1e-5, ncol(D), ncol(D))
+          }
+          Dchol <- t(chol(D))
+        }
         if("genoAD" %in% covars){ # if genetic value is desired let's do a log marker model
           Markers <- apply(Markers+1,2,log)
           G <- sommer::A.mat(Markers)
@@ -109,10 +151,10 @@ metLMMsolver <- function(
         G <- G + diag(1e-5, ncol(G), ncol(G))
         Gchol <- t(chol(G))
         if(nPC["geno"] > 0){
-          if(verbose){message("   Eigen decomposition of marker kernel requested")}
-          decomp <- RSpectra::svds(Gchol, k = min(c(nPC["geno"], ncol(Gchol))), which = "LM")
-          rownames(decomp$u) <- rownames(G); colnames(decomp$u) <- paste0("PC",namesSeq(1:ncol(decomp$u)))
-          Gchol <- decomp$u
+            if(verbose){message("   Eigen decomposition of marker kernel requested")}
+            decomp <- RSpectra::svds(Gchol, k = min(c(nPC["geno"], ncol(Gchol))), which = "LM")
+            rownames(decomp$u) <- rownames(G); colnames(decomp$u) <- paste0("PC",namesSeq(1:ncol(decomp$u)))
+            Gchol <- decomp$u
         }
       }
       ## WEATHER KERNEL
@@ -271,6 +313,23 @@ metLMMsolver <- function(
       pipeline_metricsSub <- metrics[which(metrics$trait == iTrait & metrics$parameter %in% c("plotH2","H2","meanR2","r2", apply(expand.grid( c("mean"), c("designation","mother","father")),1,function(f){paste(f,collapse = "_")}) ) ),]
       goodFieldsMean <- unique(pipeline_metricsSub[which((pipeline_metricsSub$value > meanLB[iTrait]) & (pipeline_metricsSub$value < meanUB[iTrait])),"environment"])
       prov <- prov[which(prov$environment %in% goodFieldsMean),]
+
+      #Add inbreeding coefficient to prov
+      if ("genoD" %in% covars & (!"f" %in% colnames(prov))) {
+        prov$f <- f[match(prov$designation, names(f))]
+      }
+
+      fixedTermProv <- fixedTerm
+          for(iFixed in 1:length(fixedTermProv)){ # for each element in the list # iFixed=1
+            fixedTermProv2 <- fixedTermProv[[iFixed]]
+            for(iFixed2 in  fixedTermProv2){ # for each factor in the interactions # iFixed2 = fixedTermProv2[1]
+              if(iFixed2 != "1"){
+                if( length( table(prov[,iFixed2]) ) == 1 ){ fixedTermProv[[iFixed]] <- setdiff( fixedTermProv[[iFixed]], iFixed2 )}
+              }
+            }
+          }
+          fixedTermTrait[[iTrait]] <- unique(fixedTermProv[which(unlist(lapply(fixedTermProv,length)) > 0)])
+
       if(nrow(prov) > 0){ # if after filters there's still data for this trait we can continue and save the data
         if( var(prov[,"predictedValue"], na.rm = TRUE) > 0 ){ # check that there is variance
           # make new formula for this specific trait if it passed all the filters
@@ -297,8 +356,11 @@ metLMMsolver <- function(
           # any term that is modified from what user specified we remove it totally, is better than fitting something undesired
           goodTerms <- which( ( unlist(lapply(randomTerm,length)) - unlist(lapply(randomTermProv,length)) ) == 0 )
           randomTermProv <- randomTerm[goodTerms]
-          randomTermProv <- unique(randomTermProv)
           expCovariatesProv <- expCovariates[goodTerms]
+          if (!"genoD" %in% unlist(expCovariatesProv)) {
+            randomTermProv <- unique(randomTermProv)
+          }
+
           # if reduced models reduce the datasets to the needed explanatory covariates
           if(!is.null(randomTermProv)){
             # reduce datasets
@@ -309,7 +371,9 @@ metLMMsolver <- function(
                 if( expCovariatesProv[[irandom]][irandom2] == "weather"){
                   M <- Wchol
                 }else if(expCovariatesProv[[irandom]][irandom2] %in% c("geno","genoA","genoAD") ){
-                  M = Gchol
+                  M <- Gchol
+                }else if(expCovariatesProv[[irandom]][irandom2] == "genoD"){
+                  M <- Dchol
                 }else if(expCovariatesProv[[irandom]][irandom2] == "pedigree"){
                   M <- Nchol
                 }else if(expCovariatesProv[[irandom]][irandom2] %in% traitsForExpCovariates){ # Trait kernel
@@ -340,6 +404,8 @@ metLMMsolver <- function(
                   M <- Wchol # Weather
                 }else if(expCovariatesProv[[irandom]][irandom2] %in% c("geno","genoA","genoAD") ){
                   M = Gchol # Markers
+                }else if(expCovariatesProv[[irandom]][irandom2] == "genoD"){
+                  M <- Dchol
                 }else if(expCovariatesProv[[irandom]][irandom2] == "pedigree"){
                   M <- Nchol # Pedigree
                 }else if(expCovariatesProv[[irandom]][irandom2] %in% traitsForExpCovariates){ # Trait kernel
@@ -380,11 +446,11 @@ metLMMsolver <- function(
                     }
                   }else{
                     if(sommerVersion < 44){
-                      m1 <- sommer::isc(xxList[[irandom2-1]][,1]) 
+                      m1 <- sommer::isc(xxList[[irandom2-1]][,1])
                     }else{
-                      m1 <- sommer::ism(xxList[[irandom2-1]][,1]) 
+                      m1 <- sommer::ism(xxList[[irandom2-1]][,1])
                     }
-                    
+
                   }
                   if(ncol(xxList[[irandom2]]) > 1){
                     if(sommerVersion < 44){
@@ -392,21 +458,21 @@ metLMMsolver <- function(
                     }else{
                       m2 <- sommer::ism(xx)
                     }
-                    
-                  }else{ 
+
+                  }else{
                     if(sommerVersion < 44){
-                      m2 <- sommer::isc(xx[,1]) 
+                      m2 <- sommer::isc(xx[,1])
                     }else{
-                      m2 <- sommer::ism(xx[,1]) 
+                      m2 <- sommer::ism(xx[,1])
                     }
-                    
+
                   }
                   if(sommerVersion < 44){
                     m3 <- sommer::vsc( m1  , m2  )
                   }else{
                     m3 <- sommer::vsm( m1  , m2  )
                   }
-                  
+
                   environmentCol <- list()
                   for(o in 1:length(m3$Z)){environmentCol[[o]] <- rep(colnames(m3$theta)[o],nrow(M))}
                   ff <- do.call( "cbind", m3$Z )
@@ -436,6 +502,21 @@ metLMMsolver <- function(
               entryTypeProv[[irandom]] <- paste(expCovariatesProv2,collapse = ":") # save info for kernels used in the different effects
             }
           }
+
+          if ("genoD" %in% unlist(expCovariatesProv)) { #rename designation effects
+            for (i in seq_along(randomTermProv)) {
+              for (j in seq_along(randomTermProv[[i]])) {
+                if (randomTermProv[[i]][j] == "designation") {
+                  if (expCovariatesProv[[i]][j] == "genoA") {
+                    randomTermProv[[i]][j] <- "designationA"
+                  } else if (expCovariatesProv[[i]][j] == "genoD") {
+                    randomTermProv[[i]][j] <- "designationD"
+                  }
+                }
+              }
+            }
+          }
+
           randomTermTrait[[iTrait]] <- unique(randomTermProv) # random formula for the trait
           myDataTraits[[iTrait]] <- prov # dataset for this trait
           names(groupingTermProv) <- names(envsProv) <- names(entryTypeProv) <- names(randomTermTrait[[iTrait]]) <- names(Mprov) <- unlist(lapply(randomTermProv, function(x){paste(x,collapse = "_")}))
@@ -491,6 +572,7 @@ metLMMsolver <- function(
     if(is.null(randomTermSub)){groupingSub=NULL}
     # print(groupingSub)
     # print(ranFormulation)
+
     ## model fit
     mix <- try(
       LMMsolver::LMMsolve(fixed =as.formula(fix),
@@ -504,6 +586,7 @@ metLMMsolver <- function(
       silent = TRUE
     )
     # print(mix$VarDf)
+
     pp <- list()
     if(!inherits(mix,"try-error") ){ # if random model runs well try the fixed model
       ## save the modeling used
@@ -527,9 +610,12 @@ metLMMsolver <- function(
       }
       fixedEffects <- setdiff(mix$EDdf$Term, mix$VarDf$VarComp)
       fixedEffects <- setdiff(fixedEffects, "(Intercept)")
+
       for(iGroupFixed in fixedEffects){ # iGroupFixed = fixedEffects[1]
+
         pick <- mix$ndxCoefficients[[iGroupFixed]]
         pick <- pick[which(pick!=0)]
+
         # shouldBeOne <- which(pick == 0)
         # if(length(shouldBeOne) > 0){pick[shouldBeOne] = 1}
         blue <- mix$coefMME[pick] + mu; names(blue) <- names(pick); #blue[1] <- blue[1]-mu
@@ -537,11 +623,14 @@ metLMMsolver <- function(
         nEffects <- mix$EDdf[which(mix$EDdf$Term == iGroupFixed),"Effective"]#length(blue)
         pev <- Ci[start:(start+nEffects-1),start:(start+nEffects-1)]
         if(is.matrix(pev)){ stdError <- (sqrt(Matrix::diag(pev)))}else{stdError <- pev}
+
         prov <- data.frame(designation=names(blue), predictedValue=blue, stdError=stdError, reliability=NA,
                            trait=iTrait, effectType=iGroupFixed, environment="(Intercept)" )
+
         for(iLabel in unique(unlist(fixedTermSub))){
           prov$designation <- gsub(paste0(iLabel,"_"),"",prov$designation)
         }
+
         # add additional entry type labels
         mydataSub[,"designationXXX"] <- apply(mydataSub[,unlist(strsplit(iGroupFixed,":")),drop=FALSE],1,function(x){paste(x,collapse = ":")})
         prov$entryType <- apply(data.frame(prov$designation),1,function(x){
@@ -552,6 +641,7 @@ metLMMsolver <- function(
           return(x2)
         })
         prov$entryType <- cgiarBase::replaceValues(prov$entryType, Search = "", Replace = "unknown")
+
         # save
         pp[[iGroupFixed]] <- prov
       };
@@ -605,7 +695,9 @@ metLMMsolver <- function(
           sdP <- sd(prov[,"predictedValue"],na.rm=TRUE)
           cv <- (sd(prov[,"predictedValue"],na.rm=TRUE)/mean(prov[,"predictedValue"],na.rm=TRUE))*100
           # add additional entry type labels
-          mydataSub[,"designationXXX"] <- apply(mydataSub[,unlist(randomTermSub[[iGroup]]),drop=FALSE],1,function(x){paste(x,collapse = ":")})
+          colsToUse <- unlist(randomTermSub[[iGroup]])
+          colsToUse[colsToUse %in% c("designationA", "designationD")] <- "designation"
+          mydataSub[,"designationXXX"] <- apply(mydataSub[,colsToUse,drop=FALSE],1,function(x){paste(x,collapse = ":")})
           prov$entryType <- apply(data.frame(prov$designation),1,function(x){
             found <- which(mydataSub[,"designationXXX"] %in% x)
             if(length(found) > 0){
@@ -655,7 +747,7 @@ metLMMsolver <- function(
       phenoDTfile$modeling <- rbind(phenoDTfile$modeling,currentModeling[,colnames(phenoDTfile$modeling)] )
       pp[["designation"]] <- means
     }
-    
+
     predictionsTrait <- do.call(rbind,pp)
     #############################################################
     ## add across env estimate for DESIGNATION effect type fitted
@@ -735,6 +827,7 @@ metLMMsolver <- function(
   if(length(predictionsList) == 0){stop("There was no predictions to work with. Please look at your H2 boundaries. You may be discarding all envs.",call. = FALSE)}
   predictionsBind <- do.call(rbind, predictionsList)
   predictionsBind$analysisId <- mtaAnalysisId
+
   ##########################################
   ## add timePoint of origin, stage and designation code
   if(verbose){message("Wrapping the results.")}
@@ -749,7 +842,8 @@ metLMMsolver <- function(
   }))
   predictionsBind <- merge(predictionsBind,baseOrigin, by="designation", all.x=TRUE)
   predictionsBind$module <- "mtaLmms"; rownames(predictionsBind) <- NULL
-  # print(head(predictionsBind))
+
+  #print(head(predictionsBind))
   #########################################
   ## update databases
   '%!in%' <- function(x,y)!('%in%'(x,y))
@@ -758,9 +852,45 @@ metLMMsolver <- function(
       phenoDTfile$predictions$effectType <- NA
     }
   }
-  
+
+  ##Adapt exports to GPCP model
+
+  if(all(c("designationA", "designationD") %in% predictionsBind$effectType)){
+    desA <- predictionsBind[predictionsBind$effectType == "designationA", ]
+    desD <- predictionsBind[predictionsBind$effectType == "designationD", ]
+
+    # Make sure rows align by designation + trait
+    keyCols <- c("designation", "trait")
+    desA <- desA[order(desA[[keyCols[1]]], desA[[keyCols[2]]]), ]
+    desD <- desD[order(desD[[keyCols[1]]], desD[[keyCols[2]]]), ]
+
+    #Get averages
+    avgDes <- desA
+    avgDes$predictedValue <- rowMeans(cbind(desA$predictedValue, desD$predictedValue), na.rm = TRUE)
+    avgDes$stdError <- rowMeans(cbind(desA$stdError, desD$stdError), na.rm = TRUE)
+    avgDes$effectType <- "designation"
+
+    # Drop original designationA and designationD
+    predictionsBind <- predictionsBind[!(predictionsBind$effectType %in% c("designationA", "designationD")), ]
+
+    # Add the averaged designation rows
+    predictionsBind <- rbind(predictionsBind, avgDes)
+
+    #Create GPCP exports
+    GPCP_list <- list(
+      BlupA = desA[, c("designation", "trait", "predictedValue")],
+      BlupD = desD[, c("designation", "trait", "predictedValue")],
+      f = predictionsBind[predictionsBind$effectType == "f", c("trait", "predictedValue")]
+    )
+    phenoDTfile$GPCP <- GPCP_list
+  }
+
+
   phenoDTfile$predictions <- rbind(phenoDTfile$predictions,
                                    predictionsBind[,colnames(phenoDTfile$predictions)])
+
+
+
   newStatus <- data.frame(module="mtaLmms", analysisId=mtaAnalysisId, analysisIdName=NA)
   phenoDTfile$status <- rbind( phenoDTfile$status, newStatus[,colnames(phenoDTfile$status)] )
   ## add which data was used as input
