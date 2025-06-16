@@ -27,8 +27,9 @@ traitTransformation <- function(
       traitToRemove <- c(traitToRemove,trait[k])
     }
   }
-  trait <- setdiff(trait,traitToRemove)
-  transformation <- transformation[which(traitOrig %in% trait)]
+  traitPresent <- setdiff(trait,traitToRemove)
+  trait <- trait[which(traitOrig %in% traitPresent)]
+  transformation <- transformation[which(traitOrig %in% traitPresent)]
   #####################################
   # transformation
   counter <- 1

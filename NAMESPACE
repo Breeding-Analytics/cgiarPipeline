@@ -6,7 +6,7 @@ export(
        staLMM, metLMM, metLMMsolver, mtaLmmFlex, indexDesire, baseIndex, ocs, rggMackay, rggPiepho, pgg,
        singleCrossMat, nasaPowerExtraction, summaryWeather, metASREML,
        numberFounders, individualVerification, markerAssistedSelection,
-       gwas,manhattanPlot,freeFunction
+       gwas,manhattanPlot,freeFunction, premetLMMsolver, postmetLMMsolver
        )
 
 
