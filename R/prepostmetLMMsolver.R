@@ -1,7 +1,7 @@
 premetLMMsolver <- function(phenoDTfile= NULL, fixedTerm= NULL, randomTerm=NULL){
   
   envUsed <- gsub("[^[:alnum:]]", "", unique(phenoDTfile$data$pheno[,phenoDTfile$metadata$pheno[which(phenoDTfile$metadata$pheno$parameter == "environment"),"value"]]))
-  traitUsed <- unique(phenoDTfile$metadata$pheno[which( phenoDTfile$metadata$pheno$parameter == "trait"),"value"])
+  traitUsed <- gsub("[^[:alnum:]]", "", unique(phenoDTfile$metadata$pheno[which( phenoDTfile$metadata$pheno$parameter == "trait"),"value"]))
   
   gxeList <- list("gxeCS" = c("environment_designation", "designation_environment",
                               "environment:designation", "designation:environment"),
