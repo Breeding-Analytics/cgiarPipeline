@@ -39,7 +39,7 @@ postmetLMMsolver <- function(phenoDTfile= NULL, analysisId=NULL,
                              gxeModelNum=NULL, gxeTerms=NULL){
   
   envUsed <- gsub("[^[:alnum:]]", "", unique(phenoDTfile$data$pheno[,phenoDTfile$metadata$pheno[which(phenoDTfile$metadata$pheno$parameter == "environment"),"value"]]))
-  traitUsed <- unique(phenoDTfile$metadata$pheno[which( phenoDTfile$metadata$pheno$parameter == "trait"),"value"])
+  traitUsed <- gsub("[^[:alnum:]]", "", unique(phenoDTfile$metadata$pheno[which( phenoDTfile$metadata$pheno$parameter == "trait"),"value"]))
   
   pred <- phenoDTfile$predictions
   if(gxeModelNum !=0){
