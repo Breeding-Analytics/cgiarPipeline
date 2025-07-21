@@ -7,8 +7,8 @@ premetLMMsolver <- function(phenoDTfile= NULL, fixedTerm= NULL, randomTerm=NULL)
                               "environment:designation", "designation:environment"),
                   "gxeDMD" = c(paste0("env",envUsed,"_designation"), paste0("designation_env",envUsed),
                                paste0("env",envUsed,":designation"), paste0("designation:env",envUsed)),
-                  "gxeFW" = c(paste0("value_",traitUsed,"envIndex_designation"),paste0("designation_value_",traitUsed,"envIndex"),
-                              paste0("value_",traitUsed,"envIndex:designation"),paste0("designation:value_",traitUsed,"envIndex")))
+                  "gxeFW" = c(paste0("value",traitUsed,"envIndex_designation"),paste0("designation_value",traitUsed,"envIndex"),
+                              paste0("value",traitUsed,"envIndex:designation"),paste0("designation:value",traitUsed,"envIndex")))
   
   modelTerms <- c(unlist(lapply(fixedTerm, function(x){paste(x, collapse = ":")})),
                   unlist(lapply(randomTerm, function(x){paste(x, collapse = "_")})))
