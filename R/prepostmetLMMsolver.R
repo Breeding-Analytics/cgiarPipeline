@@ -38,7 +38,10 @@ premetLMMsolver <- function(phenoDTfile= NULL, fixedTerm= NULL, randomTerm=NULL)
 postmetLMMsolver <- function(phenoDTfile= NULL, analysisId=NULL, 
                              gxeModelNum=NULL, gxeTerms=NULL){
   
-  envUsed <- gsub("[^[:alnum:]]", "", unique(phenoDTfile$data$pheno[,phenoDTfile$metadata$pheno[which(phenoDTfile$metadata$pheno$parameter == "environment"),"value"]]))
+  print(gxeModelNum)
+  print(gxeTerms)
+  
+  envUsed <- unique(phenoDTfile$data$pheno[,phenoDTfile$metadata$pheno[which(phenoDTfile$metadata$pheno$parameter == "environment"),"value"]])
   traitUsed <- unique(phenoDTfile$metadata$pheno[which( phenoDTfile$metadata$pheno$parameter == "trait"),"value"])
   
   pred <- phenoDTfile$predictions
@@ -51,7 +54,7 @@ postmetLMMsolver <- function(phenoDTfile= NULL, analysisId=NULL,
       if(any(grepl(":designation|designation:", gxeTerms))){
         gxeTermsF <- gxeTerms[which(grepl(":designation|designation:", gxeTerms))]
         for(j in 1:length(envUsed)){
-          pred[which(pred$analysisId == analysisId & pred$effectType %in% gxeTermsF & grepl(envUsed[j], pred$designation)),"environment"] <- envUsed[j]
+          pred[which(pred$analysisId == analysisId & pred$effectType %in% gxeTermsF & grepl(gsub("[^[:alnum:]]", "", envUsed[j]), pred$designation)),"environment"] <- envUsed[j]
         }
       }
     }
