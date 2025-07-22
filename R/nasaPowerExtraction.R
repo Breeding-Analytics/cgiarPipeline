@@ -212,7 +212,7 @@ summaryWeather <- function(object, wide=FALSE){
 
     out <- cbind(out,Z)
     # colnames(out) <- gsub("[[:punct:]]", "", colnames(out) )
-    colnames(out) <- gsub(" ","",colnames(out))
+    colnames(out) <- gsub("[^[:alnum:]]","",colnames(out))
     out <- out[,-1]
   }
 
