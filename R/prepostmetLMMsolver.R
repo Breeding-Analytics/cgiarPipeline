@@ -69,6 +69,7 @@ postmetLMMsolver <- function(phenoDTfile= NULL, analysisId=NULL,
       }
     }
     phenoDTfile$predictions <- pred
+    phenoDTfile$metrics <- met
   }
   
   return(phenoDTfile)
