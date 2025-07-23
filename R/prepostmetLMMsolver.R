@@ -42,6 +42,7 @@ postmetLMMsolver <- function(phenoDTfile= NULL, analysisId=NULL,
   traitUsed <- unique(phenoDTfile$metadata$pheno[which( phenoDTfile$metadata$pheno$parameter == "trait"),"value"])
   
   pred <- phenoDTfile$predictions
+  met <- phenoDTfile$metrics
   if(gxeModelNum !=0){
     if(gxeModelNum == 3){
       for (i in 1:length(traitUsed)){
@@ -61,6 +62,9 @@ postmetLMMsolver <- function(phenoDTfile= NULL, analysisId=NULL,
           pred[which(pred$analysisId == analysisId & pred$effectType %in% gxeTermsF & grepl(gsub("[^[:alnum:]]","",envUsed[j]), pred$designation)),"environment"] <- envUsed[j]
           pred[which(pred$analysisId == analysisId),"designation"] <- gsub(paste0("env",gsub("[^[:alnum:]]","",envUsed[j])),envUsed[j], pred[which(pred$analysisId == analysisId),"designation"])
           pred[which(pred$analysisId == analysisId),"effectType"] <- gsub(paste0("env",gsub("[^[:alnum:]]","",envUsed[j])),envUsed[j], pred[which(pred$analysisId == analysisId),"effectType"])
+          
+          met[which(met$analysisId == analysisId),"environment"] <- gsub(paste0("env",gsub("[^[:alnum:]]","",envUsed[j])),envUsed[j], met[which(met$analysisId == analysisId),"environment"])
+          met[which(met$analysisId == analysisId),"parameter"] <- gsub(paste0("env",gsub("[^[:alnum:]]","",envUsed[j])),envUsed[j], met[which(met$analysisId == analysisId),"parameter"])
         }
       }
     }
