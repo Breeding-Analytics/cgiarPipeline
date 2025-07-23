@@ -58,7 +58,7 @@ postmetLMMsolver <- function(phenoDTfile= NULL, analysisId=NULL,
       if(any(grepl(":designation|designation:|_designation|designation_", gxeTerms))){
         gxeTermsF <- gxeTerms[which(grepl(":designation|designation:|_designation|designation_", gxeTerms))]
         for(j in 1:length(envUsed)){
-          pred[which(pred$analysisId == analysisId & pred$effectType %in% gxeTermsF & grepl(gsub("[^[:alnum:]]","",envUsed[j]), pred$designation)),"environment"] <- envUsed[j]
+          pred[which(pred$analysisId == analysisId & pred$effectType %in% gxeTermsF & grepl(gsub("[^[:alnum:]]","",envUsed[j]), pred$designation)),"environment"] <- paste0("env",gsub("[^[:alnum:]]","",envUsed[j]))
         }
       }
     }
