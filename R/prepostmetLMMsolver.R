@@ -47,11 +47,18 @@ postmetLMMsolver <- function(phenoDTfile= NULL, analysisId=NULL,
       for (i in 1:length(traitUsed)){
         pred[which(pred$analysisId == analysisId & pred$effectType %in% gxeTerms & pred$trait == traitUsed[i]),"predictedValue"] <- pred[which(pred$analysisId == analysisId & pred$effectType %in% gxeTerms & pred$trait == traitUsed[i]),"predictedValue"] - pred[which(pred$analysisId == analysisId & pred$effectType == "(Intercept)" & pred$trait == traitUsed[i]),"predictedValue"]
       }
-    }else {
+    }else if(gxeModelNum == 1){
       if(any(grepl(":designation|designation:", gxeTerms))){
         gxeTermsF <- gxeTerms[which(grepl(":designation|designation:", gxeTerms))]
         for(j in 1:length(envUsed)){
           pred[which(pred$analysisId == analysisId & pred$effectType %in% gxeTermsF & grepl(envUsed[j], pred$designation)),"environment"] <- envUsed[j]
+        }
+      }
+    } else if(gxeModelNum == 2){
+      if(any(grepl(":designation|designation:|_designation|designation_", gxeTerms))){
+        gxeTermsF <- gxeTerms[which(grepl(":designation|designation:|_designation|designation_", gxeTerms))]
+        for(j in 1:length(envUsed)){
+          pred[which(pred$analysisId == analysisId & pred$effectType %in% gxeTermsF & grepl(gsub("[^[:alnum:]]","",envUsed[j]), pred$designation)),"environment"] <- envUsed[j]
         }
       }
     }
