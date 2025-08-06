@@ -8,5 +8,5 @@ Maintainer: Giovanny Covarrubias-Pazaran <covaruberpaz@gmail.com>
 Description: Software for analytical pipelines
 Depends: R (>= 3.5.0), Matrix (>= 1.1.1)
 License: GPL (>= 2)
-Imports: stats, graphics, grDevices
-Suggests: parallel, LMMsolver, sommer, RSpectra, pedigreemm, poolr
+Imports: stats, graphics, grDevices, poolr
+Suggests: parallel, LMMsolver, sommer, RSpectra, pedigreemm

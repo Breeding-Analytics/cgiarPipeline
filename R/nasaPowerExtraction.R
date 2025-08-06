@@ -205,9 +205,9 @@ summaryWeather <- function(object, wide=FALSE){
                        timevar = "tp", v.names = "value", sep= "_")
     rownames(out) <- out$environment
     if(nrow(out) > 1){
-      Z = model.matrix(~environment-1, data=out); colnames(Z) <- gsub("ironment","",colnames(Z))
+      Z = model.matrix(~environment-1, data=out); colnames(Z) <- gsub("environment","",colnames(Z))
     }else{
-      Z <- matrix(1,1,1); colnames(Z) <- paste0("env",out$environment)
+      Z <- matrix(1,1,1); colnames(Z) <- out$environment
     }
 
     out <- cbind(out,Z)

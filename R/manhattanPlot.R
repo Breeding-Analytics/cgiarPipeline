@@ -20,9 +20,9 @@ manhattanPlot <- function(df = NULL, threshold = NULL) { # , field = NULL
     ggplot2::geom_hline(yintercept = threshold, linetype = "dotted") +
     ggplot2::theme_classic() +
     ggplot2::theme(
-      title = element_text(colour = "black", size = 10),
-      axis.text = element_text(colour = "black"),
-      axis.title = element_text(colour = "black"),
+      title = ggplot2::element_text(colour = "black", size = 10),
+      axis.text = ggplot2::element_text(colour = "black"),
+      axis.title = ggplot2::element_text(colour = "black"),
       legend.position = "none",
       panel.border = ggplot2::element_blank(),
       panel.grid.major.x = ggplot2::element_blank(),

@@ -13,7 +13,8 @@ newOutliersFun <- function(myObject, trait, outlierCoefOutqPheno, traitLBOutqPhe
   analysisId <- NA
   myoutliers <- myObject$modifications$pheno
   if(!is.null(myoutliers) & !is.null(nrow(myoutliers)) ){ # there's previous outliers for this trait
-    outsItrait <- which(myoutliers$trait == trait)
+    traitold=gsub("-residual", "", trait)
+    outsItrait <- which(myoutliers$trait %in% traitold)
     myoutliersReduced <- myoutliers[outsItrait,] # outliers for the trait in turn
   }else{
     myoutliersReduced <- data.frame(matrix(nrow=0, ncol=6))

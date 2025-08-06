@@ -20,29 +20,24 @@ markerAssistedSelection <- function(
   }
 
   # get markers
-  Markers <- object$data$geno
-  if(is.null(Markers)){stop("This function requires your object to have marker information.", call. = FALSE)}
-  # apply modifications
-  if(!is.null(analysisIdForGenoModifications)){ # user didn't provide a modifications id
-    modificationsMarkers <- object$modifications$geno
-    theresMatch <- which(modificationsMarkers$analysisId %in% analysisIdForGenoModifications)
-    if(length(theresMatch) > 0){ # there's a modification file after matching the Id
-      modificationsMarkers <- modificationsMarkers[theresMatch,]
-      Markers <- cgiarBase::applyGenoModifications(M=Markers, modifications=modificationsMarkers)
-    }
-  }else{
-    mynames <- rownames(Markers)
-    Markers <- apply(Markers,2,sommer::imputev)
-    rownames(Markers) <- mynames
-  }
-  if (is.null(markersToBeUsed)){markersToBeUsed <- 1:ncol(Markers)}else{markersToBeUsed <- intersect(colnames(Markers),markersToBeUsed)}
+  if (class(object$data$geno)[1] == "genlight") {
+        qas <- which(names(object$data$geno_imp) == analysisIdForGenoModifications)
+        Markers <- as.data.frame(object$data$geno_imp[qas])
+		colnames(Markers)<-object[["data"]][["geno_imp"]][[qas]]@loc.names
+    }	
   Markers <- Markers[,markersToBeUsed]
   ## extract marker matrices and reference alleles
   names(positiveAlleles) <- markersToBeUsed
-  X <- result$metadata$geno[markersToBeUsed,]
+  X<- object[["data"]][["geno"]]@loc.all
+  names(X)<-object[["data"]][["geno"]]@loc.names
+  X<-X[names(X)%in%markersToBeUsed]
+  X<-strsplit(X,"/")
+  X<-data.frame(do.call(rbind,X))
+  colnames(X)<-c("refAllele","altAllele")
+    
   positiveAllelesN <- vector(mode = "numeric", length = length(positiveAlleles))
   for(j in 1:nrow(X)){
-    positiveAllelesN[j] <- ifelse(X[j,c("refAllele")] == positiveAlleles[X$marker[j]], 2, 0 )
+    positiveAllelesN[j] <- ifelse(X[j,c("refAllele")] == positiveAlleles[rownames(X)[j]], 2, 0 )
   }
   # if user doesn't express a desire we weight by 1 minus the frequency
   if(is.null(desire) ){
@@ -74,7 +69,7 @@ markerAssistedSelection <- function(
 
   w <- Gi %*% desire
 
-  merit <- Markers %*% w
+  merit <- as.matrix(Markers) %*% w
 
   ###############
   # other tables

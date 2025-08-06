@@ -103,5 +103,6 @@ indexDesire <- function(
   modeling2 <- data.frame(module="indexD",  analysisId=idxAnalysisId, trait=c("general"), environment="general",
                           parameter= c("scaled", rep("entryTypeToUse",length(entryTypeToUse)) ), value= c(scaled, entryTypeToUse))
   phenoDTfile$modeling <- rbind(phenoDTfile$modeling, modeling1[, colnames(phenoDTfile$modeling)],modeling2[, colnames(phenoDTfile$modeling)])
+
   return(phenoDTfile)
 }

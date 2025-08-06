@@ -1,506 +1,1097 @@
-metASREML <- function(
-    phenoDTfile= NULL, analysisId=NULL,
-    fixedTerm= list("1"),  randomTerm=NULL, covMod=NULL, addG=NULL, nFA=NULL,
-    envsToInclude=NULL, trait= NULL, traitFamily=NULL, useWeights=TRUE,
-    calculateSE=TRUE, heritLB= 0.15,  heritUB= 0.95,
-    meanLB=0, meanUB=Inf, maxIters=50,  verbose=TRUE
-){
-  ## THIS FUNCTION PERFORMS A MULT TRIAL ANALYSIS USING LMM SOLVER
+metASREML <- function(phenoDTfile = NULL,
+                      analysisId = NULL,
+                      analysisIdgeno = NULL,
+                      gsca = FALSE,
+                      fixedTerm = NULL,
+                      randomTerm = NULL,
+                      covMod = NULL,
+                      addG = NULL,
+                      nFA = NULL,
+                      envsToInclude = NULL,
+                      trait = NULL,
+                      traitFamily = NULL,
+                      useWeights = TRUE,
+                      calculateSE = TRUE,
+                      heritLB = 0.15,
+                      heritUB = 0.95,
+                      meanLB = 0,
+                      meanUB = Inf,
+                      maxIters = 50,
+                      verbose = TRUE)
+{
+  #save(phenoDTfile,analysisId,analysisIdgeno,gsca,fixedTerm,randomTerm,covMod, addG, nFA,envsToInclude, trait, traitFamily, useWeights,calculateSE, heritLB,  heritUB, meanLB, meanUB, maxIters,  verbose, file="NewAsr.RData")
+  #library(asreml)
+  '%!in%' <- function(x, y){! ('%in%'(x, y))}
+  covMod <- lapply(covMod, gsub, pattern = "\\.", replacement = "")
+  addG <- covMod
+  ## THIS FUNCTION PERFORMS A MULT TRIAL ANALYSIS USING asreml
   mtaAnalysisId <- as.numeric(Sys.time())
-  fixedTerm<-as.list(fixedTerm)
-  randomTerm<-as.list(randomTerm)
-  namesSeq <- function(x){
+  namesSeq <- function(x) {
     nCharX <- nchar(x)
     maxZeros <- max(nCharX)
     nZeros <- abs(nCharX - maxZeros)
-    zeros <- apply(data.frame(nZeros),1,function(x){paste(rep("0",x), collapse = "")})
+    zeros <- apply(data.frame(nZeros), 1, function(x) {
+      paste(rep("0", x), collapse = "")
+    })
     res <- paste0(zeros, as.character(x))
     return(res)
   }
   ##########################################
   ##########################################
   ## CONTROLS FOR MISSPECIFICATION (6 lines)
-  if(is.null(phenoDTfile)){stop("Please provide the phenotype file", call. = FALSE)}
-  if(is.null(analysisId)){stop("Please provide the STA analysisId to be analyzed", call. = FALSE)}
-  if(is.null(trait)){stop("Please provide traits to be analyzed", call. = FALSE)}else{
-    baseData <- phenoDTfile$predictions[which(phenoDTfile$predictions$analysisId %in% analysisId ),]
-    if(length(intersect(trait, unique(baseData[,"trait"]))) == 0){stop("The traits you have specified are not present in the analysisId provided.", call. = FALSE)}
+  if (is.null(phenoDTfile)) {
+    stop("Please provide the phenotype file", call. = FALSE)
   }
-  if(is.null(traitFamily)){traitFamily <- rep("asr_gaussian(link = 'identity')", length(trait))}
-  if(length(traitFamily) != length(trait)){stop("Trait distributions should have the same length than traits to be analyzed.", call. = FALSE)}
-  #if(length(fixedTerm)==1 & unique(unlist(fixedTerm)) == "none"){fixedTerm <- "1"}
-  traitsForExpCovariates <- unique(phenoDTfile$predictions[which(phenoDTfile$predictions$analysisId %in% analysisId),"trait"])
+  if (is.null(analysisId)) {
+    stop("Please provide the STA analysisId to be analyzed", call. = FALSE)
+  }
+  if (is.null(trait)) {
+    stop("Please provide traits to be analyzed", call. = FALSE)
+  } else{
+    baseData <- phenoDTfile$predictions[which(phenoDTfile$predictions$analysisId %in% analysisId), ]
+    if (length(intersect(trait, unique(baseData[, "trait"]))) == 0) {
+      stop("The traits you have specified are not present in the analysisId provided.",
+           call. = FALSE)
+    }
+  }
+  if (is.null(traitFamily)) {
+    traitFamily <- rep("asr_gaussian(link = 'identity', dispersion = 1.0)", length(trait))
+  }
+  if (length(traitFamily) != length(trait)) {
+    stop("Trait distributions should have the same length than traits to be analyzed.",
+         call. = FALSE)
+  }
+  traitsForExpCovariates <- unique(phenoDTfile$predictions[which(phenoDTfile$predictions$analysisId %in% analysisId), "trait"])
   ##########################################
   ##########################################
   ## EXTRACT POSSIBLE EXPLANATORY COVARIATES AND FORM KERNELS (30 lines)
-  Weather <- cgiarPipeline::summaryWeather(phenoDTfile, wide=TRUE) # in form of covariates
-  Weather <- apply(Weather,2,sommer::imputev)
-  colnames(Weather) <- gsub(" ","",colnames(Weather))
-  covars <- unique(addG)
-  randomTermForCovars <- setdiff(unique(unlist(randomTerm)),c("environment","designation"))
-  fixedTermForCovars <- setdiff(unique(unlist(fixedTerm)),c("environment","designation"))
-
-  if(covars!="none"){
-    if( any( covars %in% c("geno_model","genoAD_model", "pedigree_model") ) ){
-      if(verbose){message("Checking and calculating kernels requested")}
-      ## MARKER KERNEL
-      Markers <- phenoDTfile$data$geno # in form of covariates
-      if(any(c("geno_model","genoAD_model") %in% covars) & !is.null(Markers)){
-        #classify <- unique(unlist(randomTerm)[which(unlist(expCovariates) %in% c("geno_model","genoAD_model") )])
-        # eventually we may have to do a for loop
-        if(verbose){message(paste("   Marker kernel is requested"))}
-        qas <- which( phenoDTfile$status$module == "qaGeno" ); qas <- qas[length(qas)]
-        if(length(qas) > 0){
-          modificationsMarkers <- phenoDTfile$modifications$geno[which(phenoDTfile$modifications$geno$analysisId %in% phenoDTfile$status$analysisId[qas] ),]
-          Markers <- cgiarBase::applyGenoModifications(M=Markers, modifications=modificationsMarkers)
-          if(length(which(is.na(Markers))) > 0){Markers <- apply(Markers,2,sommer::imputev)}
-        }else{
-          missing <- apply(Markers,2,sommer::propMissing)
-          Markers <- apply(Markers[,which(missing < 0.9)],2,sommer::imputev)
+  Weather <- cgiarPipeline::summaryWeather(phenoDTfile, wide = TRUE) # in form of covariates
+  Weather <- apply(Weather, 2, sommer::imputev)
+  colnames(Weather) <- gsub(" ", "", colnames(Weather))
+  
+  covars <- unique(unlist(addG))
+  randomTermForCovars <- setdiff(unique(unlist(randomTerm)), c("environment", "designation"))
+  fixedTermForCovars <- setdiff(unique(unlist(fixedTerm)), c("environment", "designation"))
+  G=D=N=Gad=NULL
+  covkernel = c(
+    "Relationship structure_Pedigree",
+    "Relationship structure_GenoA",
+    "Relationship structure_GenoD",
+    "Relationship structure_GenoAD"
+  )
+  if (any(covkernel %in% covars)) {
+    #New structure Geno info
+    if (class(phenoDTfile$data$geno)[1] == "genlight") {
+      qas <- which(names(phenoDTfile$data$geno_imp) == analysisIdgeno)
+      Markers <- as.data.frame(phenoDTfile$data$geno_imp[qas])
+    } else{#Old structure Geno info
+      qas <- which(phenoDTfile$status$module == "qaGeno")
+      qas <- qas[length(qas)]
+      if (length(qas) > 0) {
+        modificationsMarkers <- phenoDTfile$modifications$geno[which(phenoDTfile$modifications$geno$analysisId %in% qas), ]
+        Markers <- cgiarBase::applyGenoModifications(M = Markers, modifications =
+                                                       modificationsMarkers)
+        if (length(which(is.na(Markers))) > 0) {
+          Markers <- apply(Markers, 2, sommer::imputev)
         }
-
-        ploidyFactor <- max(Markers)/2
-        if("geno_model" %in% covars){G <- sommer::A.mat(Markers-ploidyFactor);} # additive model
-        if("genoAD_model" %in% covars){ # if genetic value is desired let's do a log marker model
-          Markers <- apply(Markers+1,2,log)
-          G <- sommer::A.mat(Markers)
-        } # additive + dominance model
-        G <- G + diag(1e-5, ncol(G), ncol(G))
-        #Gchol <- t(chol(G))
-      }
-      ### WEATHER KERNEL
-      #if("weather" %in% covars & !is.null(Weather)){
-      #  #classify <- unique(unlist(randomTerm)[which(unlist(expCovariates) %in% "weather")])
-      #  if(verbose){message(paste("   Weather kernel is requested"))}
-      #  WeatherK <- Weather
-      #  rownamesWeather <- rownames(WeatherK)
-      #  WeatherK <- apply(WeatherK, 2, scale)
-      #  WeatherK <- WeatherK[,which( !is.na(apply(WeatherK,2,var)) ), drop=FALSE]
-      #  rownames(WeatherK) <- rownamesWeather
-      #  W <- sommer::A.mat(WeatherK)
-      #  W <- W + diag(1e-5, ncol(W), ncol(W))
-      #  Wchol <- t(chol(W))
-      #}
-      ## PEDIGREE KERNEL
-      Pedigree <- phenoDTfile$data$pedigree[,2:4]
-      if("pedigree_model" %in% covars  &  !is.null(Pedigree)){
-        #classify <- unique(unlist(randomTerm)[which(unlist(expCovariates) %in% "pedigree")])
-        if(verbose){message(paste("   Pedigree kernel is requested"))}
-        mydataX <-  phenoDTfile$predictions[which( phenoDTfile$predictions$analysisId %in% analysisId),]
-        Pedigree<-Pedigree[!duplicated(Pedigree[,1]),]
-        Pedigree <- Pedigree[which(Pedigree[,1] %in% unique(mydataX$designation) ), ]
-        N <- asreml::ainverse(Pedigree)
+      } else{
+        missing <- apply(Markers, 2, sommer::propMissing)
+        Markers <- apply(Markers[, which(missing < 0.9)], 2, sommer::imputev)
       }
     }
+    ploidyFactor <- max(Markers) / 2
+    mydata <- phenoDTfile$predictions
+    mydata <- mydata[which(mydata$analysisId %in% analysisId), ]
+    
+    if ("Relationship structure_GenoA" %in% covars) {
+      # additive model
+      message(paste(" Marker A kernel is requested"))
+      males <- as.character(unique(mydata$designation))
+      Markers <- Markers[intersect(rownames(Markers), c(males)), ]
+      G <- sommer::A.mat(as.matrix(Markers - ploidyFactor))
+      missing <- setdiff(c(males), rownames(G))
+      A1m <- diag(mean(diag(G)),
+                  nrow = length(missing),
+                  ncol = length(missing))
+      rownames(A1m) <- colnames(A1m) <- missing
+      G <- sommer::adiag1(G, A1m)
+      G <- G + diag(1e-5, ncol(G), ncol(G))
+    } # additive model
+    if ("Relationship structure_GenoD" %in% covars) {
+      #Dominance kernel
+      if (ploidyFactor == 1) {
+        message(paste(" Marker D kernel is requested"))
+        males <- as.character(unique(mydata$designation))
+        Markers <- Markers[intersect(rownames(Markers), c(males)), ]
+        D <- 1 - abs(Markers)
+        f <- rowSums(D) / ncol(D) #inbreeding fixed eff
+        names(f) <- rownames(Markers)
+        D <- sommer::D.mat(as.matrix(D))
+        missing <- setdiff(c(males), rownames(D))
+        A1m <- diag(mean(diag(D)),
+                    nrow = length(missing),
+                    ncol = length(missing))
+        rownames(A1m) <- colnames(A1m) <- missing
+        D <- sommer::adiag1(D, A1m)
+        Gd <- D + diag(1e-5, ncol(D), ncol(D))
+      } else{
+        #autopolyploid formula for digenic dominance (Batista et al. 2022)
+        message(paste(" Marker D kernel is requested"))
+        ploidy <- ploidyFactor * 2
+        dom_matrix = as.matrix(Markers / ploidy)
+        dom_matrix = 4 * dom_matrix - 4 * (dom_matrix * dom_matrix)
+        f <- rowSums(dom_matrix) / ncol(dom_matrix) #inbreeding fixed eff
+        names(f) <- rownames(Markers)
+        MAF <- colMeans(Markers, na.rm = TRUE) / ploidy
+        tMarkers <- t(Markers)
+        C_mat <- matrix(choose(ploidy, 2),
+                        nrow = nrow(tMarkers),
+                        ncol = ncol(tMarkers))
+        Ploidy_mat <- matrix(ploidy,
+                             nrow = nrow(tMarkers),
+                             ncol = ncol(tMarkers))
+        Q <- (MAF^2 * C_mat) - (Ploidy_mat - 1) * MAF * tMarkers + 0.5 * tMarkers * (tMarkers -
+                                                                                       1)
+        D <- crossprod(Q)
+        denomDom <- sum(C_mat[, 1] * MAF^2 * (1 - MAF)^2)
+        D <- D / denomDom
+        Gd <- D + diag(1e-5, ncol(D), ncol(D))
+      }
+    }#Dominance kernel
+    if ("Relationship structure_GenoAD" %in% covars) {
+      # additive + dominance model
+      message(paste(" Marker AD kernel is requested"))
+      Markers <- apply(Markers + 1, 2, log)
+      Gad <- sommer::A.mat(as.matrix(Markers))
+      Gad <- Gad + diag(1e-5, ncol(Gad), ncol(Gad))
+    } # additive + dominance model
+    ## PEDIGREE KERNEL
+    if ("Relationship structure_Pedigree" %in% covars) {
+      message(paste(" Pedigree kernel is requested"))
+      Pedigree <- phenoDTfile$data$pedigree[, 2:4]
+      mydataX <-  phenoDTfile$predictions[which(phenoDTfile$predictions$analysisId %in% analysisId), ]
+      Pedigree <- Pedigree[!duplicated(Pedigree[, 1]), ]
+      Pedigree <- Pedigree[which(Pedigree[, 1] %in% unique(mydataX$designation)), ]
+      N <- asreml::ainverse(Pedigree)
+    }
   }
-
-
-  ##########################################
-  ##########################################
   ## COMPLETE THE CLEANING PARAMETERS (7 lines)
   names(traitFamily) <- trait
-  heritLB <- rep(heritLB,length(trait)); heritLB <- heritLB[1:length(trait)]; names(heritLB) <- trait
-  heritUB <- rep(heritUB,length(trait)); heritUB <- heritUB[1:length(trait)]; names(heritUB) <- trait
-  meanLB <- rep(meanLB,length(trait)); meanLB <- meanLB[1:length(trait)]; names(meanLB) <- trait
-  meanUB <- rep(meanUB,length(trait)); meanUB <- meanUB[1:length(trait)]; names(meanUB) <- trait
-  traitOrig <- trait ## ?????????
-  #if(length(fixedTerm) == 0 | is.null(fixedTerm)){fixedTerm <- list("1")} # assign the intercept if there's no fixed effects
-  ##########################################
-  ##########################################
+  heritLB <- rep(heritLB, length(trait))
+  heritLB <- heritLB[1:length(trait)]
+  names(heritLB) <- trait
+  heritUB <- rep(heritUB, length(trait))
+  heritUB <- heritUB[1:length(trait)]
+  names(heritUB) <- trait
+  meanLB <- rep(meanLB, length(trait))
+  meanLB <- meanLB[1:length(trait)]
+  names(meanLB) <- trait
+  meanUB <- rep(meanUB, length(trait))
+  meanUB <- meanUB[1:length(trait)]
+  names(meanUB) <- trait
+  traitOrig <- trait 
   # LOAD THE DATASET AND EXTEND IT TO INCLUDE METADATA (16 lines)
-  if(verbose){message("Loading the dataset and adding metadata.")}
+  message("Loading the dataset and adding metadata.")
   mydata <- phenoDTfile$predictions #
-  mydata <- mydata[which(mydata$analysisId %in% analysisId),]
-  if (nrow(mydata) < 2) stop("Not enough data is available to perform a multi trial analysis. Please perform an STA before trying to do an MET.", call. = FALSE)
-  metaPheno <- phenoDTfile$metadata$pheno[which(phenoDTfile$metadata$pheno$parameter %in% c("pipeline","stage","environment","year","season","timepoint","country","location","trial","study","management")),]
-  otherMetaCols <- unique(phenoDTfile$data$pheno[,metaPheno$value,drop=FALSE])
-  colnames(otherMetaCols) <- cgiarBase::replaceValues(Source = colnames(otherMetaCols), Search = metaPheno$value, Replace = metaPheno$parameter )
-  otherMetaCols <- otherMetaCols[which(!duplicated(otherMetaCols[,"environment"])),,drop=FALSE] # we do this in case the users didn't define the environment properly
-  mydata <- merge(mydata, otherMetaCols, by="environment", all.x = TRUE)
-  WeatherRow <- as.data.frame(Weather); WeatherRow$environment <- rownames(WeatherRow)
-  mydata <- merge(mydata, WeatherRow, by="environment", all.x = TRUE)
+  mydata <- mydata[which(mydata$analysisId %in% analysisId), ]
+  if (nrow(mydata) < 2){
+    stop(
+      "Not enough data is available to perform a multi trial analysis. Please perform an STA before trying to do an MET.",
+      call. = FALSE
+    )}
+  metaPheno <- phenoDTfile$metadata$pheno[which(
+    phenoDTfile$metadata$pheno$parameter %in% c(
+      "pipeline",
+      "stage",
+      "environment",
+      "year",
+      "season",
+      "timepoint",
+      "country",
+      "location",
+      "trial",
+      "study",
+      "management"
+    )
+  ), ]
+  otherMetaCols <- unique(phenoDTfile$data$pheno[, metaPheno$value, drop =
+                                                   FALSE])
+  colnames(otherMetaCols) <- cgiarBase::replaceValues(
+    Source = colnames(otherMetaCols),
+    Search = metaPheno$value,
+    Replace = metaPheno$parameter
+  )
+  otherMetaCols <- otherMetaCols[which(!duplicated(otherMetaCols[, "environment"])), , drop =
+                                   FALSE] # we do this in case the users didn't define the environment properly
+  mydata <- merge(mydata, otherMetaCols, by = "environment", all.x = TRUE)
+  WeatherRow <- as.data.frame(Weather)
+  WeatherRow$environment <- rownames(WeatherRow)
+  mydata <- merge(mydata, WeatherRow, by = "environment", all.x = TRUE)
   ##########################################
   ##########################################
   # CHECK THE ENVS TO INCLUDE PER TRAIT (6 lines)
-  if(is.null(envsToInclude)){
-    envsToInclude=  as.data.frame( do.call( rbind, list (with(mydata, table(environment,trait)) ) ) )
+  if (is.null(envsToInclude)) {
+    envsToInclude =  as.data.frame(do.call(rbind, list (with(
+      mydata, table(environment, trait)
+    ))))
     bad <- which(envsToInclude <= 1, arr.ind = TRUE)
-    if(nrow(bad) > 0){envsToInclude[bad] = 0}
+    if (nrow(bad) > 0) {
+      envsToInclude[bad] = 0
+    }
     envsToInclude[which(envsToInclude > 1, arr.ind = TRUE)] = 1
-  }; allEnvironments <- rownames(envsToInclude)
+  }
+  allEnvironments <- rownames(envsToInclude)
   ##########################################
   ##########################################
   # BUILD THE DATASETS FOR MODEL FITTING (100 lines)
-  if(verbose){message("Building trait datasets.")}
+  message("Building trait datasets.")
   metrics <- phenoDTfile$metrics
-  metrics <- metrics[which(metrics$analysisId %in% analysisId),]
+  metrics <- metrics[which(metrics$analysisId %in% analysisId), ]
   myDataTraits <- fixedTermTrait <- randomTermTrait <- groupingTermTrait <- Mtrait <- envsTrait <- entryTypesTrait <- list()
-  for(iTrait in trait){ # iTrait = trait[1]
+  randomTermModel <- fixedTermModel <- list()
+  x_option <- function(x, y, z) {
+    switch(
+      x,
+      "none" = paste0("idv(", y, ")"),
+      "Structure model_fa" = paste0("fa(", y, ",", z, ")"),
+      "Structure model_diag" = paste0("diag(", y, ")"),
+      "Structure model_us" = paste0("us(", y, ")"),
+      "Relationship structure_GenoA" = paste0("vm(", y, ",source = G)"),
+      "Relationship structure_Pedigree" = paste0("vm(", y, ",source = N)"),
+      "Relationship structure_GenoAD" = paste0("vm(", y, ",source = Gad)"),
+      "Relationship structure_GenoD" = paste0("vm(", y, ",source = Gd)"),
+      stop("Invalid `x` value")
+    )
+  }
+  for (iTrait in trait) {
+    # iTrait = trait[1]
     # filter for records available
-    vt <- which(mydata[,"trait"] == iTrait)
-    if(length(vt) > 0){ # we have data for the trait
-      prov <- mydata[vt,]
+    vt <- which(mydata[, "trait"] == iTrait)
+    if (length(vt) > 0) {
+      # we have data for the trait
+      prov <- mydata[vt, ]
       # filter by the environments to include
-      vte <- which(prov[,"environment"] %in% rownames(envsToInclude)[as.logical(envsToInclude[,iTrait])])
-      prov <- prov[vte,]
+      vte <- which(prov[, "environment"] %in% rownames(envsToInclude)[as.logical(envsToInclude[, iTrait])])
+      prov <- prov[vte, ]
       # remove bad environment based on h2 and r2
-      pipeline_metricsSub <- metrics[which(metrics$trait == iTrait & metrics$parameter %in% c("plotH2","H2","meanR2","r2", apply(expand.grid( c("plotH2","H2","meanR2","r2"), c("designation","mother","father")),1,function(f){paste(f,collapse = "_")}) )),]
-      goodFields <- unique(pipeline_metricsSub[which((pipeline_metricsSub$value >= heritLB[iTrait]) & (pipeline_metricsSub$value <= heritUB[iTrait])),"environment"])
-      prov <- prov[which(prov$environment %in% goodFields),]
+      pipeline_metricsSub <- metrics[which(
+        metrics$trait == iTrait &
+          metrics$parameter %in% c(
+            "plotH2",
+            "H2",
+            "meanR2",
+            "r2",
+            apply(expand.grid(
+              c("plotH2", "H2", "meanR2", "r2"),
+              c("designation", "mother", "father")
+            ), 1, function(f) {
+              paste(f, collapse = "_")
+            })
+          )
+      ), ]
+      goodFields <- unique(pipeline_metricsSub[which((pipeline_metricsSub$value >= heritLB[iTrait]) &
+                                                       (pipeline_metricsSub$value <= heritUB[iTrait])
+      ), "environment"])
+      prov <- prov[which(prov$environment %in% goodFields), ]
       # remove bad environment based on environment means
-      pipeline_metricsSub <- metrics[which(metrics$trait == iTrait & metrics$parameter %in% c("plotH2","H2","meanR2","r2", apply(expand.grid( c("mean"), c("designation","mother","father")),1,function(f){paste(f,collapse = "_")}) ) ),]
-      goodFieldsMean <- unique(pipeline_metricsSub[which((pipeline_metricsSub$value > meanLB[iTrait]) & (pipeline_metricsSub$value < meanUB[iTrait])),"environment"])
-      prov <- prov[which(prov$environment %in% goodFieldsMean),]
-      if(nrow(prov) > 0){ # if after filters there's still data for this trait we can continue and save the data
-        if( var(prov[,"predictedValue"], na.rm = TRUE) > 0 ){ # check that there is variance
+      pipeline_metricsSub <- metrics[which(
+        metrics$trait == iTrait &
+          metrics$parameter %in% c(
+            "plotH2",
+            "H2",
+            "meanR2",
+            "r2",
+            apply(expand.grid(
+              c("mean"), c("designation", "mother", "father")
+            ), 1, function(f) {
+              paste(f, collapse = "_")
+            })
+          )
+      ), ]
+      goodFieldsMean <- unique(pipeline_metricsSub[which((pipeline_metricsSub$value > meanLB[iTrait]) &
+                                                           (pipeline_metricsSub$value < meanUB[iTrait])), "environment"])
+      prov <- prov[which(prov$environment %in% goodFieldsMean), ]
+      
+      #Add inbreeding coefficient to prov
+      if ("Relationship structure_GenoD" %in% covars &
+          (!"f" %in% colnames(prov))) {
+        prov$inbreeding <- f[match(prov$designation, names(f))]
+      }
+      
+      if (nrow(prov) > 0) {
+        # if after filters there's still data for this trait we can continue and save the data
+        if (var(prov[, "predictedValue"], na.rm = TRUE) > 0) {
+          # check that there is variance
           # make new formula for this specific trait if it passed all the filters
-
+          
           #fixed formula per trait
-          fixedTermTrait[[iTrait]]<-paste("asreml::asreml(fixed = predictedValue ~ 1")
-          fixedTermprov=unique(unlist(fixedTerm))
-          if(length(fixedTermprov) != 0 | !is.null(fixedTermprov)){
-            for(iFixed in 1:length(fixedTermprov)){ # for each element in the list # iFixed=1
-              fixedTermTrait[[iTrait]]<-paste(fixedTermTrait[[iTrait]],fixedTermprov[iFixed],sep=" + ")
+          #fixedTermTrait[[iTrait]] <- paste("asreml::asreml(fixed = predictedValue ~ 1")
+          fixedTermTrait[[iTrait]] <- paste("predictedValue ~ 1")
+          if (length(fixedTerm) == 1 &
+              "none" %in% unique(unlist(fixedTerm))) {
+            fixedTermprov = "none"
+          } else{
+            fixedTermprov = unique(unlist(lapply(fixedTerm, paste, collapse = ":")))
+            if (length(grep("none", fixedTermprov)) != 0) {
+              fixedTermprov = fixedTermprov[-grep("none", fixedTermprov)]
             }
           }
-          fixedTermTrait[[iTrait]]<-paste0(fixedTermTrait[[iTrait]],",")
-
-           # random formula per trait
-          randomTermTrait[[iTrait]]<-paste("random = ~")
-          randomTermprov=unique(unlist(randomTerm))
-          if(length(randomTermprov) != 0 | !is.null(randomTermprov)){
-            for(iRand in 1:length(randomTermprov)){ # for each element in the list # iFixed=1
-              randomTermTrait[[iTrait]]<-paste0(randomTermTrait[[iTrait]],randomTermprov[iRand]," + ")
+          fixedTermModel[[iTrait]] = fixedTermprov
+          if (length(fixedTermprov) != 0 | !is.null(fixedTermprov)) {
+            for (iFixed in 1:length(fixedTermprov)) {
+              # for each element in the list # iFixed=1
+              fixedTermTrait[[iTrait]] <- paste(fixedTermTrait[[iTrait]], fixedTermprov[iFixed], sep =
+                                                  " + ")
             }
           }
-
-          if(covMod=="us_model" & addG=="none"){randomTermTrait[[iTrait]]<-paste0(randomTermTrait[[iTrait]],"us(environment):idv(designation),");intTerm="environment:designation"}
-          if(covMod=="us_model" & addG=="genoAD_model"){randomTermTrait[[iTrait]]<-paste0(randomTermTrait[[iTrait]],"us(environment):vm(designation,G),");intTerm="environment:vm(designation,G)"}
-          if(covMod=="us_model" & addG=="geno_model"){randomTermTrait[[iTrait]]<-paste0(randomTermTrait[[iTrait]],"us(environment):vm(designation,G),");intTerm="environment:vm(designation,G)"}
-          if(covMod=="us_model" & addG=="pedigree_model"){randomTermTrait[[iTrait]]<-paste0(randomTermTrait[[iTrait]],"us(environment):vm(designation,N),");intTerm="environment:vm(designation,N)"}
-
-          if(covMod=="diag_model" & addG=="none"){randomTermTrait[[iTrait]]<-paste0(randomTermTrait[[iTrait]],"diag(environment):idv(designation),");intTerm="environment:designation"}
-          if(covMod=="diag_model" & addG=="genoAD_model"){randomTermTrait[[iTrait]]<-paste0(randomTermTrait[[iTrait]],"diag(environment):vm(designation,G),");intTerm="environment:vm(designation,G)"}
-          if(covMod=="diag_model" & addG=="geno_model"){randomTermTrait[[iTrait]]<-paste0(randomTermTrait[[iTrait]],"diag(environment):vm(designation,G),");intTerm="environment:vm(designation,G)"}
-          if(covMod=="diag_model" & addG=="pedigree_model"){randomTermTrait[[iTrait]]<-paste0(randomTermTrait[[iTrait]],"diag(environment):vm(designation,N),");intTerm="environment:vm(designation,N)"}
-
-          if(covMod=="fa_model" & addG=="none"){randomTermTrait[[iTrait]]<-paste0(randomTermTrait[[iTrait]],paste0("fa(environment,",nFA,"):idv(designation),"));intTerm=paste0("fa(environment,",nFA,"):designation")}
-          if(covMod=="fa_model" & addG=="genoAD_model"){randomTermTrait[[iTrait]]<-paste0(randomTermTrait[[iTrait]],paste0("fa(environment,",nFA,"):vm(designation,G),"));intTerm=paste0("fa(environment,",nFA,"):vm(designation,G)")}
-          if(covMod=="fa_model" & addG=="geno_model"){randomTermTrait[[iTrait]]<-paste0(randomTermTrait[[iTrait]],paste0("fa(environment,",nFA,"):vm(designation,G),"));intTerm=paste0("fa(environment,",nFA,"):vm(designation,G)")}
-          if(covMod=="fa_model" & addG=="pedigree_model"){randomTermTrait[[iTrait]]<-paste0(randomTermTrait[[iTrait]],paste0("fa(environment,",nFA,"):vm(designation,N),"));intTerm=paste0("fa(environment,",nFA,"):vm(designation,N)")}
-
-          if(covMod=="none" & addG=="none"){randomTermTrait[[iTrait]]<-paste0(randomTermTrait[[iTrait]],"environment:designation,");intTerm="environment:designation"}
-          if(covMod=="none" & addG=="genoAD_model"){randomTermTrait[[iTrait]]<-paste0(randomTermTrait[[iTrait]],"idv(environment):vm(designation,G),");intTerm="environment:vm(designation,G)"}
-          if(covMod=="none" & addG=="geno_model"){randomTermTrait[[iTrait]]<-paste0(randomTermTrait[[iTrait]],"idv(environment):vm(designation,G),");intTerm="environment:vm(designation,G)"}
-          if(covMod=="none" & addG=="pedigree_model"){randomTermTrait[[iTrait]]<-paste0(randomTermTrait[[iTrait]],"idv(environment):vm(designation,N),");intTerm="environment:vm(designation,N)"}
-
+          #fixedTermTrait[[iTrait]] <- paste0(fixedTermTrait[[iTrait]], ",")
+          
+          # random formula per trait
+          #randomTermTrait[[iTrait]] <- paste("random = ~")
+          randomTermTrait[[iTrait]] <- "~"
+          randomTermprov = list()
+          for (w in 1:length(randomTerm)) {
+            if (length(covMod[[w]]) == 1) {
+              randomTermprov[[w]] = x_option(covMod[[w]], randomTerm[[w]], nFA[[w]])
+            } else{
+              randomTermprov[[w]] = c(
+                x_option(covMod[[w]][1], randomTerm[[w]][1], nFA[[w]]),
+                x_option(covMod[[w]][2], randomTerm[[w]][2], nFA[[w]])
+              )
+            }
+          }
+          randomTermprov = unique(unlist(lapply(
+            randomTermprov, paste, collapse = ":"
+          )))
+          randomTermModel[[iTrait]] = randomTermprov
+          if (length(randomTermprov) != 0 | !is.null(randomTermprov)) {
+            randomTermTrait[[iTrait]] <- paste(randomTermTrait[[iTrait]], randomTermprov[1], sep =
+                                                 " ")
+            for (iRand in 2:length(randomTermprov)) {
+              # for each element in the list # iFixed=1
+              randomTermTrait[[iTrait]] <- paste(randomTermTrait[[iTrait]], randomTermprov[iRand], sep =
+                                                   " + ")
+            }
+          }
+          #randomTermTrait[[iTrait]] <- paste0(randomTermTrait[[iTrait]], ",")
+          
           myDataTraits[[iTrait]] <- prov # dataset for this trait
           # end of formula formation
         }
       }
     }
   }
-  # print(groupingTermTrait)
-  ##########################################
-  ##########################################
   ## MODEL FITTING
-  if(verbose){message("Fitting a model.")}
-  predictionsList <- list();
-  for(iTrait in names(myDataTraits)){ # # iTrait = trait[2]  iTrait="value"
-    if(verbose){message(paste("Analyzing trait", iTrait))}
+  message("Fitting a model.")
+  
+  predictionsList <- list()
+  
+  for (iTrait in names(myDataTraits)) {
+    # # iTrait = trait[1]  iTrait="value"
+    message(paste("Analyzing trait", iTrait))
+    
     mydataSub <- myDataTraits[[iTrait]] # extract dataset
-    fixedTermSub<-fixedTermTrait[[iTrait]]
-    randomTermSub<-randomTermTrait[[iTrait]]
+    fixedTermSub <- fixedTermTrait[[iTrait]]
+    randomTermSub <- randomTermTrait[[iTrait]]
     ## deregress if needed
-    VarFull <- var(mydataSub[,"predictedValue"], na.rm = TRUE) # total variance
-    effectTypeTrait <- phenoDTfile$modeling[which(phenoDTfile$modeling$analysisId == analysisId & phenoDTfile$modeling$trait == iTrait & phenoDTfile$modeling$parameter == "designationEffectType"),"value"]
-    if(names(sort(table(effectTypeTrait), decreasing = TRUE))[1] == "BLUP"){ # if STA was BLUPs deregress
-      mydataSub$predictedValue <- mydataSub$predictedValue/mydataSub$reliability
+    VarFull <- var(mydataSub[, "predictedValue"], na.rm = TRUE) # total variance
+    effectTypeTrait <- phenoDTfile$modeling[which(
+      phenoDTfile$modeling$analysisId == analysisId &
+        phenoDTfile$modeling$trait == iTrait &
+        phenoDTfile$modeling$parameter == "designationEffectType"
+    ), "value"]
+    if (names(sort(table(effectTypeTrait), decreasing = TRUE))[1] == "BLUP") {
+      # if STA was BLUPs deregress
+      mydataSub$predictedValue <- mydataSub$predictedValue / mydataSub$reliability
     }
     ## calculate weights
-    mydataSub=mydataSub[with(mydataSub, order(environment)), ] # sort by environments
-    mydataSub$w <- 1/(mydataSub$stdError^2) # add weights column
+    mydataSub <- mydataSub[with(mydataSub, order(environment)), ] # sort by environments
+    #mydataSub$w <- 1 / (mydataSub$stdError^2) # add weights column
+    w <- 1 / (mydataSub$stdError^2) # add weights column
     # warnin messages in weights use
-      if(verbose){message("   Using weights in the analysis. Residual variance will be fixed to 1.")  }
+    message(" Using weights in the analysis. Residual variance will be fixed to 1. ")
+    
     #trasform to factor variables
-    labfactor<-c("environment","module","analysisId","pipeline","trait","gid","designation","mother","father","entryType","effectType","year","location")
-    tranfactfixed<-which(unlist(fixedTerm)%in%labfactor==T)
-    tranfactrandom<-which(unlist(randomTerm)%in%labfactor==T)
-    if(length(tranfactfixed)!=0){mydataSub[,unlist(fixedTerm)[tranfactfixed]]=as.factor(mydataSub[,unlist(fixedTerm)[tranfactfixed]])}
-    if(length(tranfactrandom)!=0){mydataSub[,unlist(randomTerm)[tranfactrandom]]=as.factor(mydataSub[,unlist(randomTerm)[tranfactrandom]])}
+    labfactor <- c(
+      "environment",
+      "module",
+      "analysisId",
+      "pipeline",
+      "trait",
+      "gid",
+      "designation",
+      "mother",
+      "father",
+      "entryType",
+      "effectType",
+      "year",
+      "location"
+    )
+    tranfactfixed <- which(unique(unlist(fixedTerm)) %in% labfactor == T)    
+    if (length(tranfactfixed) != 0) {
+      mydataSub[, unique(unlist(fixedTerm))[tranfactfixed]] = lapply(mydataSub[unique(unlist(fixedTerm))[tranfactfixed]], as.factor)
+    }
+    tranfactrandom <- which(unique(unlist(randomTerm)) %in% labfactor == T)
+    if (length(tranfactrandom) != 0) {
+      mydataSub[, unique(unlist(randomTerm))[tranfactrandom]] = lapply(mydataSub[unique(unlist(randomTerm))[tranfactrandom]], as.factor)
+    }
+    
+    asreml::asreml.options(workspace = 30e7,pworkspace = 200e7,trace = T,ai.sing = T)
+    
+    fixed_formula <- tryCatch(as.formula(fixedTermSub), error = function(e) return(NULL))
+    random_formula <- tryCatch(as.formula(randomTermSub), error = function(e) return(NULL))
+    
+    if (is.null(fixed_formula) | is.null(random_formula)) {
+      return("⚠️ Error in the formula: check the sintaxis.")
+    }
+    
+    family_arg <- eval(parse(text = traitFamily[iTrait]))
+    # Adjust model with asreml
+    tryCatch({
+      mix <<- asreml::asreml(
+        fixed = fixed_formula,
+        random = random_formula,
+        data = mydataSub,
+        na.action = na.method(x='include', y='include'),
+        maxit = maxIters,
+        weights = w,
+        family = family_arg,	
+        envir = .GlobalEnv
+      )      
+      #summary(mix)
+    }, error = function(e) {
+      paste("❌ Error to adjust model:", e$message)
+    })
+  
+  
 
-    asreml::asreml.options(workspace = 30e7, pworkspace = 30e7, trace=T,ai.sing=T)
-    ## model fit
-    modelfit=paste0("mix<-",fixedTermSub, randomTermSub,"weights = w,family = ",traitFamily[iTrait],	",na.action = na.method(x='include'),data=mydataSub,maxit = ",maxIters,")")
-	mix <- try(eval(parse(text=modelfit)),silent=TRUE)
-
-	if(!inherits(mix,"try-error") ){
-	  upval=0
-	  if (!mix$converge & upval<=10) { upval=upval+1; eval(parse(text='mix<-asreml::update.asreml(mix)')) }
-	}
-    # print(mix$VarDf)
-    pp <- list()
-    if(!inherits(mix,"try-error") ){
-      # get variance components
-      ss <- summary(mix)$varcomp
-      Ve <- ss["units!R","component"]
-      mu<-coef(mix)[["fixed"]]["(Intercept)",]
-      Ci<-mix[["vcoeff"]][["fixed"]][1]*mix$sigma2
-      #mu <- mix$coefMME[mix$ndxCoefficients$`(Intercept)`]
-      #Ci <- solve(mix$C)
-      if(length(mu) > 0){
-        pp[["(Intercept)"]] <- data.frame(designation="(Intercept)", predictedValue=mu, stdError=sqrt(Ci), reliability=NA,
-                                          trait=iTrait, effectType="(Intercept)", entryType="(Intercept)", environment="(Intercept)" )
+    update_until_converged <- function(model, max_updates = 10, verbose = TRUE) {
+      count <- 0
+      while (!model$converge && count < max_updates) {
+        count <- count + 1
+        if (verbose) message("🔄 Update #", count, "...")
+        model <- tryCatch(asreml::update.asreml(model), error = function(e) {
+          warning("⚠️ Error while update(): ", e$message)
+          return(model)
+        })
       }
-      for(iGroupFixed in unlist(fixedTerm)){ # iGroupFixed = unlist(fixedTerm)[1]
-        pick <- coef(mix)[["fixed"]][grepl(iGroupFixed,rownames(coef(mix)[["fixed"]]))]
-        if (length(pick)>1){
-          names(pick)<-rownames(coef(mix)[["fixed"]])[grepl(iGroupFixed,rownames(coef(mix)[["fixed"]]))]
-          pick <- pick[which(pick!=0)]
-        }else{
-          if(pick==0){
-            pick<-rep((-1)*mu,2)
-            names(pick)<-rep(rownames(coef(mix)[["fixed"]])[grepl(iGroupFixed,rownames(coef(mix)[["fixed"]]))],2)
-            pick<-pick[1]
-          }else{
-            pick<-rep(pick,2)
-            names(pick)<-rep(rownames(coef(mix)[["fixed"]])[grepl(iGroupFixed,rownames(coef(mix)[["fixed"]]))],2)
-            pick<-pick[1]
+      
+      if (model$converge) {
+        if (verbose) message("✅ Convergence in " , count, " updates")
+        } else {
+        warning("❌ No convergence in ", max_updates, " updates")
+      }
+      
+      return(model)
+    }
+
+    if (!inherits(mix, "try-error")) {
+      mix <<- update_until_converged(mix, max_updates = 10)
+    }
+    
+    pp <- list()
+    if (!inherits(mix, "try-error")) {
+    # get variance components
+    ss <- summary(mix)$varcomp
+    Ve <- ss["units!R", "component"]
+    mu <- coef(mix)[["fixed"]]["(Intercept)", ]
+    Ci <- mix[["vcoeff"]][["fixed"]][1] * mix$sigma2
+    if (length(mu) > 0) {
+      pp[["(Intercept)"]] <- data.frame(
+        designation = "(Intercept)",
+        predictedValue = mu,
+        stdError = sqrt(Ci),
+        reliability = NA,
+        trait = iTrait,
+        effectType = "(Intercept)",
+        entryType = "(Intercept)",
+        environment = "(Intercept)"
+      )
+    }
+    #fixed effect start
+    fixTermObt = unlist(fixedTermModel[[iTrait]])
+    if (length(grep("none", fixTermObt)) == 0) {
+      for (iGroupFixed in fixTermObt) {
+        # iGroupFixed=unlist(fixedTermModel[[iTrait]])[1]
+        pick <- coef(mix)[["fixed"]][grepl(iGroupFixed, rownames(coef(mix)[["fixed"]]))]
+        if (length(pick) > 1) {
+          names(pick) <- rownames(coef(mix)[["fixed"]])[grepl(iGroupFixed, rownames(coef(mix)[["fixed"]]))]
+          pick <- pick[which(pick != 0)]
+        } else{
+          if (pick == 0) {
+            pick <- rep((-1) * mu, 2)
+            names(pick) <- rep(rownames(coef(mix)[["fixed"]])[grepl(iGroupFixed, rownames(coef(mix)[["fixed"]]))], 2)
+            pick <- pick[1]
+          } else{
+            pick <- rep(pick, 2)
+            names(pick) <- rep(rownames(coef(mix)[["fixed"]])[grepl(iGroupFixed, rownames(coef(mix)[["fixed"]]))], 2)
+            pick <- pick[1]
           }
         }
-        # shouldBeOne <- which(pick == 0)
-        # if(length(shouldBeOne) > 0){pick[shouldBeOne] = 1}
-        blue <- pick+mu; names(blue) <- names(pick); #blue[1] <- blue[1]-mu
-        #start <- sum(mix$EDdf[1:(which(mix$EDdf$Term == iGroupFixed) - 1),"Model"]) # we don't add a one because we need the intercept
-        #nEffects <- mix$EDdf[which(mix$EDdf$Term == iGroupFixed),"Effective"]#length(blue)
-        #pev <- Ci[start:(start+nEffects-1),start:(start+nEffects-1)]
-        pev <- mix[["vcoeff"]][["fixed"]][grepl(iGroupFixed,rownames(coef(mix)[["fixed"]]))]*mix$sigma2
-        if (length(pick)>1){pev <- pev[which(pev!=0)]}
-        if(is.matrix(pev)){ stdError <- (sqrt(Matrix::diag(pev)))}else{stdError <- sqrt(pev)}
-        prov <- data.frame(designation=names(blue), predictedValue=blue, stdError=stdError, reliability=NA,
-                           trait=iTrait, effectType=iGroupFixed, environment="(Intercept)" )
-        for(iLabel in unique(unlist(fixedTerm))){
-          prov$designation <- gsub(paste0(iLabel,"_"),"",prov$designation)
+        blue <- pick + mu
+        names(blue) <- names(pick)
+        #blue[1] <- blue[1]-mu
+        pev <- mix[["vcoeff"]][["fixed"]][grepl(iGroupFixed, rownames(coef(mix)[["fixed"]]))] * mix$sigma2
+        if (length(pick) >= 1) {
+          pev <- pev[which(pev != 0)]
+        }
+        if (is.matrix(pev)) {
+          stdError <- (sqrt(Matrix::diag(pev)))
+        } else{
+          stdError <- sqrt(pev)
+        }
+        prov <- data.frame(
+          designation = names(blue),
+          predictedValue = blue,
+          stdError = stdError,
+          reliability = NA,
+          trait = iTrait,
+          effectType = iGroupFixed,
+          environment = "(Intercept)"
+        )
+        for (iLabel in unique(unlist(fixedTerm))) {
+          prov$designation <- gsub(paste0(iLabel, "_"), "", prov$designation)
         }
         # add additional entry type labels
-        mydataSub[,"designationXXX"] <- apply(mydataSub[,unlist(strsplit(iGroupFixed,":")),drop=FALSE],1,function(x){paste(x,collapse = ":")})
-        prov$entryType <- apply(data.frame(prov$designation),1,function(x){
-          found <- which(mydataSub[,"designationXXX"] %in% x)
-          if(length(found) > 0){
-            x2 <- paste(sort(unique(toupper(trimws(mydataSub[found,"entryType"])))), collapse = "#");
-          }else{x2 <- "unknown"}
+        mydataSub[, "designationXXX"] <- apply(mydataSub[, unlist(strsplit(iGroupFixed, ":")), drop =
+                                                           FALSE], 1, function(x) {
+                                                             paste(x, collapse = ":")
+                                                           })
+        prov$entryType <- apply(data.frame(prov$designation), 1, function(x) {
+          found <- which(mydataSub[, "designationXXX"] %in% x)
+          if (length(found) > 0) {
+            x2 <- paste(sort(unique(toupper(
+              trimws(mydataSub[found, "entryType"])
+            ))), collapse = "#")
+          } else{
+            x2 <- "unknown"
+          }
           return(x2)
         })
-        prov$entryType <- cgiarBase::replaceValues(prov$entryType, Search = "", Replace = "unknown")
+        prov$entryType <- cgiarBase::replaceValues(prov$entryType,
+                                                   Search = "",
+                                                   Replace = "unknown")
         # save
         pp[[iGroupFixed]] <- prov
-      };
-
-      if ("designation"%in%unlist(randomTerm)){groupingSub=c("designation",intTerm)}else{groupingSub=intTerm}
-      for(iGroup in groupingSub){
-        #for( iGroup in names(groupingSub)){ # iGroup=groupingSub[1]
-        if ("designation"%in%unlist(randomTerm)){
-          Vg <- ss["designation","component"]
-        }else{
-          Vg<-NA
-          message(paste("Didn't find genetic term in the model for calculate"))
-        }
-
-        blup=predict(mix,classify=iGroup)$pvals
-        if (all(blup$status=="Aliased")){
-          statusmetrics="Aliased estimation, problems with the model, please check!"
-          stdError <- reliability <- rep(NA,dim(blup)[1])
-        }else{
-          statusmetrics=mix$converge
-          message(paste("   Calculating standar errors for",iTrait, iGroup,"predictions"))
-          stdError <- blup$std.error # random effect was just one column
-          reliability <- abs((Vg - (stdError^2)) /Vg) # reliability <- abs((Vg - Matrix::diag(pev))/Vg)
-        }
-
-        badRels <- which(reliability > 1); if(length(badRels) > 0){reliability[badRels] <- 0.9999}
-        badRels2 <- which(reliability < 0); if(length(badRels2) > 0){reliability[badRels2] <- 0}
-        if(iGroup=="designation"){effTypeSub="designation"}else{effTypeSub="environment_designation"}
-        if(iGroup=="designation"){envTypeSub="(Intercept)"}else{envTypeSub=blup$environment}
-
-        if(ncol(blup)>4){
-          namesblup=c("designation",names(blup)[3:5])
-          blup=data.frame(cbind(paste0(blup[,1],":",blup[,2]),blup[,3],blup[,4],blup[,5]))
-          names(blup)=namesblup
-          blup$predicted.value=as.numeric(blup$predicted.value)
-        }
-
-          prov <- data.frame(designation=blup$designation, predictedValue=blup$predicted.value, stdError=stdError, reliability=reliability,
-                             trait=iTrait, effectType=effTypeSub , environment=envTypeSub)
-
-          # end of adding fixed effects
-          sdP <- sd(prov[,"predictedValue"],na.rm=TRUE)
-          cv <- (sd(prov[,"predictedValue"],na.rm=TRUE)/mean(prov[,"predictedValue"],na.rm=TRUE))*100
-          # add additional entry type labels
-          mydataSub[,"designationXXX"] <- apply(mydataSub[,"designation",drop=FALSE],1,function(x){paste(x,collapse = ":")})
-          prov$entryType <- apply(data.frame(prov$designation),1,function(x){
-            found <- which(mydataSub[,"designationXXX"] %in% x)
-            if(length(found) > 0){
-              x2 <- paste(sort(unique(toupper(trimws(mydataSub[found,"entryType"])))), collapse = "#");
-            }else{x2 <- "unknown"}
-            return(x2)
-          })
-          prov$entryType <- cgiarBase::replaceValues(prov$entryType, Search = "", Replace = "unknown")
-          # save
-          pp[[iGroup]] <- prov
-          phenoDTfile$metrics <- rbind(phenoDTfile$metrics,
-                                       data.frame(module="mtaAsr",analysisId=mtaAnalysisId, trait= iTrait,
-                                                  environment=paste(unique(envTypeSub), collapse = "_"),
-                                                  parameter=c( paste(c("mean","sd", "r2","Var"),effTypeSub,sep="_") ),
-                                                  method=c("sum(x)/n","sd","(G-PEV)/G","REML"),
-                                                  value=c(mean(prov[,"predictedValue"], na.rm=TRUE), sdP, median(reliability), var(prov[,"predictedValue"], na.rm=TRUE) ),
-                                                  stdError=c(NA,NA,sd(reliability, na.rm = TRUE)/sqrt(length(reliability)),NA )
-                                       )
-          )
       }
-
-      ## save the modeling used
-      currentModeling <- data.frame(module="MtaAsr", analysisId=mtaAnalysisId,trait=iTrait, environment=c(rep("across",4), "designation"),
-                                    parameter=c("fixedFormula","randomFormula","family","convergence",rep("kernels",1)),
-                                    value=c(fixedTermSub,randomTermSub,traitFamily[iTrait],statusmetrics,addG ))
-      phenoDTfile$modeling <- rbind(phenoDTfile$modeling,currentModeling[,colnames(phenoDTfile$modeling)] )
-      ## save the environments used goodFields
-      currentModeling <- data.frame(module="MtaAsr", analysisId=mtaAnalysisId,trait=iTrait, environment=allEnvironments,
-                                    parameter="includedInMta",
-                                    value=ifelse(allEnvironments%in%unique(mydataSub$environment), TRUE, FALSE))
-      phenoDTfile$modeling <- rbind(phenoDTfile$modeling,currentModeling[,colnames(phenoDTfile$modeling)] )
-
-    }else{ # if model failed
-      if(verbose){ cat(paste("Mixed model failed for trait",iTrait,". Aggregating and assuming h2 = 0 \n"))}
-      means <- aggregate(predictedValue ~ designation, FUN=mean, data=mydataSub)
+    }#fixed effect finish
+    #Start random effects
+    x_option2 <- function(x, y, z) {
+      switch(x,
+             "none" = paste0(y),
+             "Structure model_fa" = paste0("fa(", y, ",", z, ")"),
+             "Structure model_diag" = paste0(y),
+             "Structure model_us" = paste0(y),
+             "Relationship structure_GenoA" = paste0("vm(", y, ", source = G)"),
+             "Relationship structure_Pedigree" = paste0("vm(", y, ", source = N)"),
+             "Relationship structure_GenoAD" = paste0("vm(", y, ", source = Gad)"),
+             "Relationship structure_GenoD" = paste0("vm(", y, ", source = Gd)"),
+             stop("Invalid `x` value")
+      )
+    }
+    #Random terms genetics
+    subgroupGen = c()
+    oriGen = c()
+    relstrGen = c()
+    only1 = which(lapply(randomTerm, length) == 1)
+    count = 1
+    for (sb in 1:length(only1)) {
+      if (randomTerm[[only1[sb]]] %in% c("designation", "mother", "father", "gid") == T) {
+        subgroupGen[count] = x_option2(covMod[[only1[sb]]], randomTerm[[only1[sb]]], nFA[[only1[sb]]])
+        oriGen[count] = randomTerm[[only1[sb]]]
+        relstrGen[count] = covMod[[only1[sb]]]
+        count = count + 1
+      }
+    }
+    #Random terms interaction
+    subgroupInt = c()
+    only2 = which(lapply(randomTerm, length) == 2)
+    if(length(only2)!=0){
+      for (sb2 in 1:length(only2)) {
+        ed = all(randomTerm[[only2[sb2]]] %in% c("environment", "designation"))
+        if (ed == T) {
+          subgroupInt[sb2] = paste0(
+            x_option2(covMod[[only2[sb2]]][1], randomTerm[[only2[sb2]]][1], nFA[[only2[sb2]]]),
+            ":",
+            x_option2(covMod[[only2[sb2]]][2], randomTerm[[only2[sb2]]][2], nFA[[only2[sb2]]])
+          )
+        }
+      }
+    }
+    
+    if (gsca == T) {
+      gca = summary(mix, coef = TRUE)$coef.random
+      prov <- data.frame(
+        designation = rownames(gca),
+        predictedValue = gca[, 1],
+        stdError = gca[, 2],
+        reliability = rep(NA, dim(gca)[1]),
+        trait = iTrait,
+        effectType = "GCA/SCA" ,
+        environment = "GCA/SCA",
+        entryType = "unknown"
+      )
+      pp[["GCA/SCA"]] <- prov
+    }
+    
+    groupingSub = c(subgroupGen, subgroupInt)
+    for (iGroup in groupingSub) {
+      #for( iGroup in names(groupingSub)){ # iGroup=groupingSub[2]
+      if (iGroup %in% subgroupGen) {
+        Vg <- ss[iGroup, "component"]
+      } else{
+        Vg <- NA
+      }
+      
+      blup = predict(mix, classify = iGroup)$pvals
+      if (all(blup$status == "Aliased")) {
+        statusmetrics = "Aliased estimation, problems with the model, please check!"
+        stdError <- reliability <- rep(NA, dim(blup)[1])
+        lsdt <- NA
+      } else{
+        statusmetrics = mix$converge
+        message(paste(" Calculating standar errors for",iTrait,iGroup,"predictions"))
+        stdError <- blup$std.error # random effect was just one column
+        reliability <- abs((Vg - (stdError^2)) / Vg) # reliability <- abs((Vg - Matrix::diag(pev))/Vg)
+        lsdt <- qt(1 - 0.05 / 2, round(mix$nedf)) * predict(mix, classify =iGroup)$avsed
+      }
+      
+      badRels <- which(reliability > 1)
+      if (length(badRels) > 0) {
+        reliability[badRels] <- 0.9999
+      }
+      badRels2 <- which(reliability < 0)
+      if (length(badRels2) > 0) {
+        reliability[badRels2] <- 0
+      }
+      
+      if (iGroup %in% subgroupInt) {
+        effTypeSub = "environment_designation"
+        envTypeSub = blup$environment
+        nameblup1 = iGroup
+      } else{
+        if (relstrGen[which(subgroupGen %in% iGroup == T)] == "Relationship structure_GenoA") {
+          effTypeSub = paste0(oriGen[which(subgroupGen %in% iGroup == T)], "A")
+        }
+        if (relstrGen[which(subgroupGen %in% iGroup == T)] == "Relationship structure_GenoD") {
+          effTypeSub = paste0(oriGen[which(subgroupGen %in% iGroup == T)], "D")
+        }
+        if (relstrGen[which(subgroupGen %in% iGroup == T)] == "Relationship structure_GenoAD") {
+          effTypeSub = paste0(oriGen[which(subgroupGen %in% iGroup == T)], "AD")
+        }
+        if (relstrGen[which(subgroupGen %in% iGroup == T)] == "Relationship structure_Pedigree") {
+          effTypeSub = paste0(oriGen[which(subgroupGen %in% iGroup == T)], "Ped")
+        }
+        if (relstrGen[which(subgroupGen %in% iGroup == T)] == "none") {
+          effTypeSub = paste0(oriGen[which(subgroupGen %in% iGroup == T)], "Idv")
+        }
+        envTypeSub = "(Intercept)"
+        nameblup1 = grep(oriGen[which(subgroupGen %in% iGroup == T)], names(blup))
+      }
+      
+      
+      if (ncol(blup) > 4) {
+        namesblup = c(nameblup1, names(blup)[3:5])
+        blup = data.frame(cbind(paste0(blup[, 1], ":", blup[, 2]), blup[, 3], blup[, 4], blup[, 5]))
+        names(blup) = namesblup
+        blup$predicted.value = as.numeric(blup$predicted.value)
+      }
+      
+      prov <- data.frame(
+        designation = blup[, nameblup1],
+        predictedValue = blup$predicted.value,
+        stdError = stdError,
+        reliability = reliability,
+        trait = iTrait,
+        effectType = effTypeSub ,
+        environment = envTypeSub
+      )
+      
+      # end of adding fixed effects
+      sdP <- sd(prov[, "predictedValue"], na.rm = TRUE)
+      cv <- (sd(prov[, "predictedValue"], na.rm = TRUE) / mean(prov[, "predictedValue"], na.rm = TRUE)) * 100      
+      # add additional entry type labels
+      mydataSub[, "designationXXX"] <- apply(mydataSub[, "designation", drop =
+                                                         FALSE], 1, function(x) {
+                                                           paste(x, collapse = ":")
+                                                         })
+      prov$entryType <- apply(data.frame(prov$designation), 1, function(x) {
+        found <- which(mydataSub[, "designationXXX"] %in% x)
+        if (length(found) > 0) {
+          x2 <- paste(sort(unique(toupper(
+            trimws(mydataSub[found, "entryType"])
+          ))), collapse = "#")
+          
+        } else{
+          x2 <- "unknown"
+        }
+        return(x2)
+      })
+      prov$entryType <- cgiarBase::replaceValues(prov$entryType,
+                                                 Search = "",
+                                                 Replace = "unknown")
+      # save
+      pp[[iGroup]] <- prov
+      phenoDTfile$metrics <- rbind(
+        phenoDTfile$metrics,
+        data.frame(
+          module = "mtaAsr",
+          analysisId = mtaAnalysisId,
+          trait = iTrait,
+          environment = paste(unique(envTypeSub), collapse = "_"),
+          parameter = c(paste(
+            c("mean", "sd", "r2", "Var", "CV%", "LSD95%"),
+            effTypeSub,
+            sep = "_"
+          )),
+          method = c(
+            "sum(x)/n",
+            "sd",
+            "(G-PEV)/G",
+            "REML",
+            "(sd/mean)*100",
+            "t*avsed"
+          ),
+          value = c(
+            mean(prov[, "predictedValue"], na.rm = TRUE),
+            sdP,
+            median(reliability),
+            var(prov[, "predictedValue"], na.rm = TRUE),
+            cv,
+            lsdt
+          ),
+          stdError = c(
+            NA,
+            NA,
+            sd(reliability, na.rm = TRUE) / sqrt(length(reliability)),
+            NA,
+            NA,
+            NA
+          )
+        )
+      )
+    }
+    
+    kernels = paste(unlist(addG)[which(
+      unlist(addG) %in% c(
+        "Relationship structure_GenoA",
+        "Relationship structure_GenoD",
+        "Relationship structure_Pedigree",
+        "Relationship structure_GenoAD"
+      ) == T
+    )], collapse = ",")
+    if (length(kernels) == 0) { kernels = "none" }
+    ## save the modeling used
+    currentModeling <- data.frame(
+      module = "MtaAsr",
+      analysisId = mtaAnalysisId,
+      trait = iTrait,
+      environment = c(rep("across", 4), "designation"),
+      parameter = c(
+        "fixedFormula",
+        "randomFormula",
+        "family",
+        "convergence",
+        rep("kernels", 1)
+      ),
+      value = c(
+        fixedTermSub,
+        randomTermSub,
+        traitFamily[iTrait],
+        statusmetrics,
+        kernels
+      )
+    )
+    phenoDTfile$modeling <- rbind(phenoDTfile$modeling, currentModeling[, colnames(phenoDTfile$modeling)])
+    ## save the environments used goodFields
+    currentModeling <- data.frame(
+      module = "MtaAsr",
+      analysisId = mtaAnalysisId,
+      trait = iTrait,
+      environment = allEnvironments,
+      parameter = "includedInMta",
+      value = ifelse(
+        allEnvironments %in% unique(mydataSub$environment),
+        TRUE,
+        FALSE
+      )
+    )
+    phenoDTfile$modeling <- rbind(phenoDTfile$modeling, currentModeling[, colnames(phenoDTfile$modeling)])
+    
+    }else{
+      # if model failed
+      message(paste("Mixed model failed for trait",iTrait,". Aggregating and assuming h2 = 0 \n"))
+      
+      Ve <- NA
+      means <- aggregate(predictedValue ~ designation,
+                         FUN = mean,
+                         data = mydataSub)
       means$environment <- "(Intercept)"
       means$stdError <- sd(means$predictedValue)
       means$reliability <- 1e-6
       means$trait <- iTrait
       means$effectType <- "designation"
       means$entryType <- "unknown"
-      sdP <- sd(means$predictedValue,na.rm=TRUE)
-      cv <- (sd(means$predictedValue,na.rm=TRUE)/mean(means$predictedValue,na.rm=TRUE))*100
+      sdP <- sd(means$predictedValue, na.rm = TRUE)
+      cv <- (sd(means$predictedValue, na.rm = TRUE) / mean(means$predictedValue, na.rm =TRUE)) * 100
       ## save metrics
-      phenoDTfile$metrics <- rbind(phenoDTfile$metrics,
-                                   data.frame(module="mtaAsr",analysisId=mtaAnalysisId, trait=iTrait,
-                                              environment="across",
-                                              parameter=c("mean","sd", "r2","Var_designation","Var_residual"),
-                                              method=c("sum(x)/n","sd","(G-PEV)/G","REML","REML"),
-                                              value=c(mean(means$predictedValue, na.rm=TRUE), sdP, NA, NA, NA ),
-                                              stdError=NA
-                                   )
+      phenoDTfile$metrics <- rbind(
+        phenoDTfile$metrics,
+        data.frame(
+          module = "mtaAsr",
+          analysisId = mtaAnalysisId,
+          trait = iTrait,
+          environment = "across",
+          parameter = c("mean", "sd", "r2", "Var", "CV%", "LSD95%"),
+          method = c(
+            "sum(x)/n",
+            "sd",
+            "(G-PEV)/G",
+            "REML",
+            "(sd/mean)*100",
+            "t*avsed"
+          ),
+          value = c(
+            mean(means$predictedValue, na.rm = TRUE),
+            sdP,
+            NA,
+            NA,
+            NA,
+            NA
+          ),
+          stdError = NA
+        )
       )
-      currentModeling <- data.frame(module="mtaAsr", analysisId=mtaAnalysisId,trait=iTrait, environment="across",
-                                    parameter=c("fixedFormula","randomFormula","family","designationEffectType"),
-                                    value=c("None","None","None","mean"))
-      phenoDTfile$modeling <- rbind(phenoDTfile$modeling,currentModeling[,colnames(phenoDTfile$modeling)] )
+      currentModeling <- data.frame(
+        module = "mtaAsr",
+        analysisId = mtaAnalysisId,
+        trait = iTrait,
+        environment = "across",
+        parameter = c(
+          "fixedFormula",
+          "randomFormula",
+          "family",
+          "designationEffectType"
+        ),
+        value = c("None", "None", "None", "mean")
+      )
+      phenoDTfile$modeling <- rbind(phenoDTfile$modeling, currentModeling[, colnames(phenoDTfile$modeling)])
       pp[["designation"]] <- means
     }
-
-    predictionsTrait <- do.call(rbind,pp)
-    #############################################################
+    predictionsTrait <- do.call(rbind, pp)
     ## add across env estimate for DESIGNATION effect type fitted
-    #############################################################
-    match1 <- unlist(lapply(unlist(fixedTerm),function(x){sum(as.numeric(x=="designation"))}))
-    names(match1) <- unlist(lapply(unlist(fixedTerm),function(x){paste(x,collapse = "_")}))
-    match2 <- unlist(lapply(unlist(randomTerm),function(x){sum(as.numeric(x=="designation"))}))
-    names(match2)<-unlist(lapply(unlist(randomTerm),function(x){paste(x,collapse = "_")}))
-    match3 <- c(match1,match2)
-    useForPreds <- names(match3)[which(match3 > 0)]
-    doublematch <- table(predictionsTrait$effectType, predictionsTrait$environment)
-    interceptCheck <- sum(apply(data.frame(useForPreds),1,function(x){sum(as.numeric("(Intercept)" %in% colnames(doublematch)[which(doublematch[x,]>0)]))}))
-    '%!in%' <- function(x,y)!('%in%'(x,y))
-    if( length(useForPreds) > 0 & interceptCheck==0 ){ # only if there was designation and no main effect exist then we aggregate
+    match1 <- unlist(lapply(unlist(fixedTerm), function(x) {sum(as.numeric(grep("designation", x)))}))
+    names(match1) <- unlist(lapply(unlist(fixedTerm), function(x) {paste(x, collapse = "_")}))
+    match2 <- unlist(lapply(randomTerm, function(x) {sum(as.numeric(grep("designation", x)))}))
+    names(match2) <- unlist(lapply(randomTerm, function(x) {
+      paste(x, collapse = "_")
+    }))
+    match3 <- c(match1, match2)
+    useForPreds <- unique(names(match3)[which(match3 > 0)])
+    doublematch <- table(predictionsTrait$effectType,
+                         predictionsTrait$environment)
+    useForPreds <- rownames(doublematch)[unique(unlist(apply(data.frame(useForPreds), 1, function(x) {
+      grep(x, rownames(doublematch))
+    })))]
+    interceptCheck <- sum(apply(data.frame(useForPreds), 1, function(x) {
+      sum(as.numeric("(Intercept)" %in% colnames(doublematch)[which(doublematch[x, ] >
+                                                                      0)]))
+    }))
+    if (length(useForPreds) > 0 & interceptCheck == 0) {
+      # only if there was designation and no main effect exist then we aggregate
       provx <- predictionsTrait
-      provx <- provx[which(provx$effectType %in% useForPreds),]
-      provx$designation <- apply(provx[,c("environment","designation")],1,function(x){gsub(paste0(x[1],":"),"",x[2])})
-      provx <- aggregate(cbind(predictedValue,stdError,reliability)~designation+trait, FUN=mean, data=provx)
+      provx <- provx[which(provx$effectType %in% useForPreds), ]
+      provx$designation <- apply(provx[, c("environment", "designation")], 1, function(x) {
+        gsub(paste0(x[1], ":"), "", x[2])
+      })
+      provx <- aggregate(
+        cbind(predictedValue, stdError, reliability) ~ designation + trait,
+        FUN = mean,
+        data = provx
+      )
       provx$environment <- "(Intercept)"
       provx$effectType <- "designation"
-      provx$entryType <- apply(data.frame(provx$designation),1,function(x){
-        found <- which(mydataSub[,"designationXXX"] %in% x)
-        if(length(found) > 0){
-          x2 <- paste(sort(unique(toupper(trimws(mydataSub[found,"entryType"])))), collapse = "#");
-        }else{x2 <- "unknown"}
+      provx$entryType <- apply(data.frame(provx$designation), 1, function(x) {
+        found <- which(mydataSub[, "designationXXX"] %in% x)
+        if (length(found) > 0) {
+          x2 <- paste(sort(unique(toupper(
+            trimws(mydataSub[found, "entryType"])
+          ))), collapse = "#")
+          
+        } else{
+          x2 <- "unknown"
+        }
         return(x2)
       })
       provx$entryType <- cgiarBase::replaceValues(provx$entryType, Search = "", Replace = "unknown")
-      predictionsTrait <- rbind(predictionsTrait, provx[,colnames(predictionsTrait)])
+      predictionsTrait <- rbind(predictionsTrait, provx[, colnames(predictionsTrait)])
     }
-    #############################################################
     ## add across env estimate for GID effect type fitted
-    #############################################################
-    match1 <- unlist(lapply(unlist(fixedTerm),function(x){sum(as.numeric(x=="gid"))}))
-    names(match1) <- unlist(lapply(unlist(fixedTerm),function(x){paste(x,collapse = "_")}))
-    match2 <- unlist(lapply(unlist(randomTerm),function(x){sum(as.numeric(x=="gid"))}))
-    names(match2)<-unlist(lapply(unlist(randomTerm),function(x){paste(x,collapse = "_")}))
-    match3 <- c(match1,match2)
+    match1 <- unlist(lapply(unlist(fixedTerm), function(x) {sum(as.numeric(x == "gid"))}))
+    names(match1) <- unlist(lapply(unlist(fixedTerm), function(x) {paste(x, collapse = "_")}))
+    match2 <- unlist(lapply(randomTerm, function(x) {sum(as.numeric(x == "gid"))}))
+    names(match2) <- unlist(lapply(randomTerm, function(x) {paste(x, collapse = "_")}))
+    match3 <- c(match1, match2)
     useForPreds <- names(match3)[which(match3 > 0)]
-    doublematch <- table(predictionsTrait$effectType, predictionsTrait$environment)
-    interceptCheck <- sum(apply(data.frame(useForPreds),1,function(x){sum(as.numeric("(Intercept)" %in% colnames(doublematch)[which(doublematch[x,]>0)]))}))
-    '%!in%' <- function(x,y)!('%in%'(x,y))
-    if( length(useForPreds) > 0 & interceptCheck==0 ){ # only if there was designation and no main effect exist then we aggregate
+    doublematch <- table(predictionsTrait$effectType,
+                         predictionsTrait$environment)
+    useForPreds <- rownames(doublematch)[unique(unlist(apply(data.frame(useForPreds), 1, function(x) {
+      grep(x, rownames(doublematch))
+    })))]
+    interceptCheck <- sum(apply(data.frame(useForPreds), 1, function(x) {
+      sum(as.numeric("(Intercept)" %in% colnames(doublematch)[which(doublematch[x, ] >
+                                                                      0)]))
+    }))
+    if (length(useForPreds) > 0 & interceptCheck == 0) {
+      # only if there was designation and no main effect exist then we aggregate
       provx <- predictionsTrait
-      provx <- provx[which(provx$effectType %in% useForPreds),]
-      provx$designation <- apply(provx[,c("environment","designation")],1,function(x){gsub(paste0(x[1],":"),"",x[2])})
-      provx <- aggregate(cbind(predictedValue,stdError,reliability)~designation+trait, FUN=mean, data=provx)
+      provx <- provx[which(provx$effectType %in% useForPreds), ]
+      provx$designation <- apply(provx[, c("environment", "designation")], 1, function(x) {
+        gsub(paste0(x[1], ":"), "", x[2])
+      })
+      provx <- aggregate(
+        cbind(predictedValue, stdError, reliability) ~ designation + trait,
+        FUN = mean,
+        data = provx
+      )
       provx$environment <- "(Intercept)"
       provx$effectType <- "gid"
-      provx$entryType <- apply(data.frame(provx$designation),1,function(x){
-        found <- which(mydataSub[,"designationXXX"] %in% x)
-        if(length(found) > 0){
-          x2 <- paste(sort(unique(toupper(trimws(mydataSub[found,"entryType"])))), collapse = "#");
-        }else{x2 <- "unknown"}
+      provx$entryType <- apply(data.frame(provx$designation), 1, function(x) {
+        found <- which(mydataSub[, "designationXXX"] %in% x)
+        if (length(found) > 0) {
+          x2 <- paste(sort(unique(toupper(
+            trimws(mydataSub[found, "entryType"])
+          ))), collapse = "#")
+          
+        } else{
+          x2 <- "unknown"
+        }
         return(x2)
       })
       provx$entryType <- cgiarBase::replaceValues(provx$entryType, Search = "", Replace = "unknown")
-      predictionsTrait <- rbind(predictionsTrait, provx[,colnames(predictionsTrait)])
+      predictionsTrait <- rbind(predictionsTrait, provx[, colnames(predictionsTrait)])
     }
-    #
-    phenoDTfile$metrics <- rbind(phenoDTfile$metrics,
-                                 data.frame(module="mtaAsr",analysisId=mtaAnalysisId, trait= iTrait, environment="across",
-                                            parameter=c("Var_residual","nEnv","nEntries"),
-                                            method=c("REML","n","n"),
-                                            value=c( Ve, length(goodFields), length(unique(mydataSub$designation)) ),
-                                            stdError=c(NA,NA,NA) )
+    phenoDTfile$metrics <- rbind(
+      phenoDTfile$metrics,
+      data.frame(
+        module = "mtaAsr",
+        analysisId = mtaAnalysisId,
+        trait = iTrait,
+        environment = "across",
+        parameter = c("Var_residual", "nEnv", "nEntries"),
+        method = c("REML", "n", "n"),
+        value = c(Ve, length(goodFields), length(unique(
+          mydataSub$designation
+        ))),
+        stdError = c(NA, NA, NA)
+      )
     )
     predictionsList[[iTrait]] <- predictionsTrait
   }
-  ## enf of model fitting
-  if(length(predictionsList) == 0){stop("There was no predictions to work with. Please look at your H2 boundaries. You may be discarding all envs.",call. = FALSE)}
+  
+  if (length(predictionsList) == 0) {
+    stop(
+      "There was no predictions to work with. Please look at your H2 boundaries. You may be discarding all envs.",
+      call. = FALSE
+    )
+  }
+  
   predictionsBind <- do.call(rbind, predictionsList)
   predictionsBind$analysisId <- mtaAnalysisId
-  ##########################################
   ## add timePoint of origin, stage and designation code
-  if(verbose){message("Wrapping the results.")}
-  entries <- unique(mydata[,"designation"])
-  baseOrigin <- do.call(rbind, apply(data.frame(entries),1,function(x){
-    out1 <- (sort(mydata[which(mydata$designation %in% x),"gid"], decreasing = FALSE))[1]
-    out2 <- (sort(mydata[which(mydata$designation %in% x),"mother"], decreasing = FALSE))[1]
-    out3 <- (sort(mydata[which(mydata$designation %in% x),"father"], decreasing = FALSE))[1]
-    out4 <- paste(unique(sort(mydata[which(mydata$designation %in% x),"pipeline"], decreasing = FALSE)),collapse=", ")
-    y <- data.frame(designation=x,gid=out1,mother=out2,father=out3,pipeline=out4)
+  entries <- unique(mydata[, "designation"])
+  baseOrigin <- do.call(rbind, apply(data.frame(entries), 1, function(x) {
+    out1 <- (sort(mydata[which(mydata$designation %in% x), "gid"], decreasing = FALSE))[1]
+    out2 <- (sort(mydata[which(mydata$designation %in% x), "mother"], decreasing = FALSE))[1]
+    out3 <- (sort(mydata[which(mydata$designation %in% x), "father"], decreasing = FALSE))[1]
+    out4 <- paste(unique(sort(mydata[which(mydata$designation %in% x), "pipeline"], decreasing = FALSE)), collapse =
+                    ", ")
+    y <- data.frame(
+      designation = x,
+      gid = out1,
+      mother = out2,
+      father = out3,
+      pipeline = out4
+    )
     return(y)
   }))
-  predictionsBind <- merge(predictionsBind,baseOrigin, by="designation", all.x=TRUE)
-  predictionsBind$module <- "mtaAsr"; rownames(predictionsBind) <- NULL
-  # print(head(predictionsBind))
-  #########################################
-  ## update databases
-  '%!in%' <- function(x,y)!('%in%'(x,y))
-  if(!is.null(phenoDTfile$predictions)){
-    if("effectType" %!in% colnames(phenoDTfile$predictions) ){
+  predictionsBind <- merge(predictionsBind,
+                           baseOrigin,
+                           by = "designation",
+                           all.x = TRUE)
+  predictionsBind$module <- "mtaAsr"
+  rownames(predictionsBind) <- NULL
+  
+  if (!is.null(phenoDTfile$predictions)) {
+    if ("effectType" %!in% colnames(phenoDTfile$predictions)) {
       phenoDTfile$predictions$effectType <- NA
     }
   }
-  phenoDTfile$predictions <- rbind(phenoDTfile$predictions,
-                                   predictionsBind[,colnames(phenoDTfile$predictions)])
-  newStatus <- data.frame(module="mtaAsr", analysisId=mtaAnalysisId, analysisIdName=NA)
-  phenoDTfile$status <- rbind( phenoDTfile$status, newStatus[,colnames(phenoDTfile$status)] )
+  ##Adapt exports to GPCP model
+  desigName = c(
+    "designationA",
+    "designationD",
+    "designationAD",
+    "designationPed",
+    "designationIdv"
+  )
+  if (any(desigName %in% predictionsBind$effectType)) {
+    more2 = desigName[which(desigName %in% predictionsBind$effectType == T)]
+    avgDes=list()
+    Bytraits=unique(predictionsBind$trait)
+    for(tt in 1:length(Bytraits)){
+      predictionsBindtmp=subset(predictionsBind,predictionsBind$trait==Bytraits[tt])
+      avgDes[[tt]] <- predictionsBindtmp[which(predictionsBindtmp$effectType == more2[1]), ]
+      if (length(more2) > 1) {
+      # Filtrar
+        df_sub <- predictionsBindtmp[predictionsBindtmp$effectType %in% more2, ]
+        avgDes[[tt]]$predictedValue <- aggregate(
+          predictedValue ~ designation,
+          data = df_sub,
+          FUN = function(x)
+          mean(x, na.rm = TRUE)
+        )[, 2]
+        avgDes[[tt]]$stdError <- aggregate(
+          stdError ~ designation,
+          data = df_sub,
+          FUN = function(x)
+            mean(x, na.rm = TRUE)
+        )[, 2]
+        avgDes[[tt]]$reliability <- aggregate(
+          reliability ~ designation,
+          data = df_sub,
+          FUN = function(x)
+            mean(x, na.rm = TRUE)
+        )[, 2]
+        avgDes[[tt]]$effectType <- "designation"
+      } else{
+        avgDes[[tt]]$effectType <- "designation"
+      }
+    }  
+    avgDes=do.call(rbind,avgDes)
+    # Add the averaged designation rows
+    predictionsBind <- rbind(predictionsBind, avgDes)
+  }
+    
+  phenoDTfile$predictions <- rbind(phenoDTfile$predictions, predictionsBind[, colnames(phenoDTfile$predictions)])
+  newStatus <- data.frame(module = "mtaAsr",
+                          analysisId = mtaAnalysisId,
+                          analysisIdName = NA)
+  phenoDTfile$status <- rbind(phenoDTfile$status, newStatus[, colnames(phenoDTfile$status)])
   ## add which data was used as input
-  modeling <- data.frame(module="mtaAsr",  analysisId=mtaAnalysisId, trait=c("inputObject"), environment="general",
-                         parameter= c("analysisId"), value= c(analysisId ))
-
+  modeling <- data.frame(
+    module = "mtaAsr",
+    analysisId = mtaAnalysisId,
+    trait = c("inputObject"),
+    environment = "general",
+    parameter = c("analysisId"),
+    value = c(analysisId)
+  )
+  
   phenoDTfile$modeling <- rbind(phenoDTfile$modeling, modeling[, colnames(phenoDTfile$modeling)])
+  message("Wrapping the results.")
+  
+  #save(phenoDTfile, file = "asrResult1.RData")
+  
   return(phenoDTfile)
 }

@@ -76,21 +76,28 @@ rggPiepho <- function(
   # define wether we should deregress or not
   modelingInput <- phenoDTfile$modeling
   modelingInput <- modelingInput[which(modelingInput$analysisId == analysisId),]
-  if(unique(modelingInput$module) %in% c("mta","mtaFlex") ){
-    designationEffectType <- unique(modelingInput[which(modelingInput$parameter == "designationEffectType"),"value"])
-    if(any(designationEffectType %in% c("BLUP","GBLUP","PBLUP","SSBLUP") )){
-      deregress=TRUE
-    }else{ # BLUE
-      deregress=FALSE
-    }
-  }else{ # mtaLmms
-    designationEffectType <- unique(modelingInput[modelingInput$parameter == "kernels","value"])
-    if(any(designationEffectType %in% c("pedigree","geno") )){
-      deregress=TRUE
-    }else{ # BLUE
-      deregress=FALSE
-    }
+  designationEffectType <- modelingInput[which(modelingInput$parameter == "randomFormula"),"value"]
+  if(length(grep("designation", designationEffectType)) > 0){
+    deregress=TRUE
+  }else{ # BLUE
+    deregress=FALSE
   }
+  # if(unique(modelingInput$module) == "sta"){
+  #   designationEffectType <- modelingInput[which(modelingInput$parameter == "randomFormula"),"value"]
+  #   if(length(grep("designation", designationEffectType)) > 0){
+  #     deregress=TRUE
+  #   }else{ # BLUE
+  #     deregress=FALSE
+  #   }
+  # }else{ # mtaLmms
+  #   designationEffectType <- modelingInput[which(modelingInput$parameter == "randomFormula"),"value"]
+  #   if(length(grep("grp\\(designation\\)", designationEffectType)) > 0){
+  #     deregress=TRUE
+  #   }else{ # BLUE
+  #     deregress=FALSE
+  #   }
+  # }
+  
   # remove traits that are not actually present in the dataset
   traitToRemove <- character()
   for(k in 1:length(trait)){
@@ -193,9 +200,11 @@ rggPiepho <- function(
 
           gg.y1<- sort(unique(mydataSub2[,fixedTerm]), decreasing = FALSE)[1]
           gg.yn <- sort(unique(mydataSub2[,fixedTerm]), decreasing = TRUE)[1]
-          ntrial <- phenoDTfile$metrics
+          ntrial <- phenoDTfile$predictions # number of trials
+          ntrial <- ntrial[which(ntrial$analysisId ==analysisId),]
           ntrial <- ntrial[which(ntrial$trait ==iTrait),]
-          ntrial <- length(unique(ntrial$environment))
+          ntrial <- unique(ntrial$environment)
+          ntrial <- length(ntrial[which(ntrial %in% environmentToUse)] )
           val[[iBoot]] <- c(b1,b0, b1Perc, b1PercAverageYear, r2, pv, ntrial,gg.y1,gg.yn, ngt  )
           stdError[[iBoot]] <- c(seb1,seb0,b1PercSe,b1PercSeAverageYear,0,0,0,0,0, ngtSe)
           counter=counter+1

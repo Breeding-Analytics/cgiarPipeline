@@ -1,7 +1,7 @@
-
 ### 1. RR-BLUP / GBLUP - based GWAS model
 gwas <- function (
     analysisId = NULL,
+    analysisIdName = "",
     analysisIdForGenoModifications = NULL,
     phenoDTfile = NULL,
     trait = NULL,
@@ -24,20 +24,21 @@ gwas <- function (
   if(!is.null(phenoDTfile$data$geno) & !is.null(phenoDTfile$metadata$geno)){
     Markers <- phenoDTfile$data$geno
     if(is.null(analysisIdForGenoModifications)){ # user didn't provide a modifications id
-      if(length(which(is.na(Markers))) > 0){stop("Markers have missing data and you have not provided a modifications table to impute the genotype data. Please go to the 'Markers QA/QC' module prior to run a gBLUP or rrBLUP model.", call. = FALSE)}
+      if(length(which(adegenet::glNA(Markers) > 0)) > 0){stop("Markers have missing data and you have not provided a modifications table to impute the genotype data. Please go to the 'Markers QA/QC' module prior to run a gBLUP or rrBLUP model.", call. = FALSE)}
     }else{ # user provided a modifications Id
       modificationsMarkers <- phenoDTfile$modifications$geno
       theresMatch <- which(modificationsMarkers$analysisId %in% analysisIdForGenoModifications)
       if(length(theresMatch) > 0){ # there's a modification file after matching the Id
         modificationsMarkers <- modificationsMarkers[theresMatch,]
-        Markers <- cgiarBase::applyGenoModifications(M=Markers, modifications=modificationsMarkers)
+        #Markers <- phenoDTfile$data$geno_imp[[ as.character(as.integer(analysisIdForGenoModifications)) ]]
+        Markers <- phenoDTfile$data$geno_imp[[grep(as.character(as.integer(analysisIdForGenoModifications)),names(phenoDTfile$data$geno_imp))]]  
       }else{ # there's no match of the modification file
-        if(length(which(is.na(Markers))) > 0){stop("Markers have missing data and your Id didn't have a match in the modifications table to impute the genotype data.", call. = FALSE)}
+        if(length(which(adegenet::glNA(Markers) > 0)) > 0){stop("Markers have missing data and your Id didn't have a match in the modifications table to impute the genotype data.", call. = FALSE)}
       }
     }
   }
   
-  entryType <- unique(phenoDTfile$predictions[phenoDTfile$predictions$module %in% c("sta","mta"),"entryType"])
+  entryType <- unique(phenoDTfile$predictions[phenoDTfile$predictions$module %in% c("sta","mtaLmms"),"entryType"])
   entryType <- ifelse(length(entryType) > 1, sort(entryType)[1], entryType)
   
   for(iTrait in trait) {
@@ -45,10 +46,9 @@ gwas <- function (
     for(iField in field) {
       
       ### 2. Preparing marker data
-      markers <- Markers[order(rownames(Markers)), ]
-      marker_map <- phenoDTfile$metadata$geno
-      marker_map <- marker_map[,c(1:3)]
-      colnames(marker_map) <- c("SNP", "CHR", "BP")
+      marker_map <- data.frame(SNP = Markers@loc.names,
+                               CHR = Markers@chromosome,
+                               BP = Markers@position)
       
       ### 1. Preparing phenotypic data
       "%>%" <- dplyr::`%>%`
@@ -62,8 +62,8 @@ gwas <- function (
         dplyr::select(c("ID", all_of(iTrait)))
       
       ### 3. Filtering for genotypes with phenotype and genotype data
-      common_ids <- intersect(rownames(markers), phenoData$ID)
-      markers <- markers[rownames(markers) %in% common_ids, ]
+      common_ids <- intersect(Markers@ind.names, phenoData$ID)
+      markers <- as.matrix(Markers[which(Markers@ind.names %in% common_ids),])
       phenoData <- phenoData[phenoData$ID %in% common_ids, ]
       
       ### 4. Calculate GRM
@@ -191,7 +191,10 @@ gwas <- function (
       # output <- list(don, don_sorted) # phenoDTfile
       # pipeline <- unique(phenoDTfile$predictions$pipeline)
       don_sorted <- data.frame(module = "gwas", analysisId = gwasAnalysisId, pipeline = NA, trait = iTrait, gid = NA, designation = don_sorted$SNP,
-                               mother = NA, father = NA, entryType = entryType, environment = iField, predictedValue = don_sorted$`-log10(P)`, stdError = don_sorted$CHR, reliability = don_sorted$BP)
+                               mother = NA, father = NA, entryType = entryType,
+                               environment = iField, predictedValue = don_sorted$`-log10(P)`,
+                               stdError = don_sorted$CHR, reliability = don_sorted$BP,
+                               effectType = NA)
       phenoDTfile$predictions <- rbind(phenoDTfile$predictions,don_sorted)
       #
       modeling <- data.frame(module="gwas", analysisId=gwasAnalysisId,trait=iTrait, environment=iField,
@@ -213,7 +216,7 @@ gwas <- function (
       phenoDTfile$metrics <- rbind(phenoDTfile$metrics, metrics)
     }
   }
-  phenoDTfile$status <- rbind(phenoDTfile$status, data.frame(module="gwas", analysisId=gwasAnalysisId))
+  phenoDTfile$status <- rbind(phenoDTfile$status, data.frame(module="gwas", analysisId=gwasAnalysisId, analysisIdName = analysisIdName))
   ## add which data was used as input
   modeling <- data.frame(module="gwas",  analysisId=gwasAnalysisId, trait=c("inputObject"), environment="general",
                          parameter= c("analysisId"), value= c(analysisId))

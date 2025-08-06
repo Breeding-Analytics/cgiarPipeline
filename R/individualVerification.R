@@ -19,17 +19,21 @@ individualVerification <- function(
     object$predictions$effectType <- "general"
   }
   # get markers
-  Markers <- object$data$geno
+  #Markers <- object$data$geno
+  if (class(object$data$geno)[1] == "genlight") {
+        qas <- which(names(object$data$geno_imp) == analysisIdForGenoModifications)
+        Markers <- as.data.frame(object$data$geno_imp[qas])
+  }	 
   if(is.null(Markers)){stop("This function requires your object to have marker information.", call. = FALSE)}
   # apply modifications
-  if(!is.null(analysisIdForGenoModifications)){ # user didn't provide a modifications id
-    modificationsMarkers <- object$modifications$geno
-    theresMatch <- which(modificationsMarkers$analysisId %in% analysisIdForGenoModifications)
-    if(length(theresMatch) > 0){ # there's a modification file after matching the Id
-      modificationsMarkers <- modificationsMarkers[theresMatch,]
-      Markers <- cgiarBase::applyGenoModifications(M=Markers, modifications=modificationsMarkers)
-    }
-  }
+  #if(!is.null(analysisIdForGenoModifications)){ # user didn't provide a modifications id
+  #  modificationsMarkers <- object$modifications$geno
+  #  theresMatch <- which(modificationsMarkers$analysisId %in% analysisIdForGenoModifications)
+  #  if(length(theresMatch) > 0){ # there's a modification file after matching the Id
+  #    modificationsMarkers <- modificationsMarkers[theresMatch,]
+  #    Markers <- cgiarBase::applyGenoModifications(M=Markers, modifications=modificationsMarkers)
+  #  }
+  #}
   if (is.null(markersToBeUsed)){markersToBeUsed <- 1:ncol(Markers)}else{markersToBeUsed <- intersect(colnames(Markers),markersToBeUsed)}
   Markers <- Markers[,markersToBeUsed]
   ## extract marker matrices and reference alleles

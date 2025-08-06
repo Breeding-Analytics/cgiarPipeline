@@ -65,21 +65,27 @@ rggMackay <- function(
   # define wether we should deregress or not
   modelingInput <- phenoDTfile$modeling
   modelingInput <- modelingInput[which(modelingInput$analysisId == analysisId),]
-  if(unique(modelingInput$module) %in% c("mta","mtaFlex") ){
-    designationEffectType <- unique(modelingInput[which(modelingInput$parameter == "designationEffectType"),"value"])
-    if(any(designationEffectType %in% c("BLUP","GBLUP","PBLUP","SSBLUP") )){
-      deregress=TRUE
-    }else{ # BLUE
-      deregress=FALSE
-    }
-  }else{ # mtaLmms
-    designationEffectType <- unique(modelingInput[modelingInput$parameter == "kernels","value"])
-    if(any(designationEffectType %in% c("pedigree","geno") )){
-      deregress=TRUE
-    }else{ # BLUE
-      deregress=FALSE
-    }
+  designationEffectType <- modelingInput[which(modelingInput$parameter == "randomFormula"),"value"]
+  if(length(grep("designation", designationEffectType)) > 0){
+    deregress=TRUE
+  }else{ # BLUE
+    deregress=FALSE
   }
+  # if(unique(modelingInput$module) == "sta"){
+  #   designationEffectType <- modelingInput[which(modelingInput$parameter == "randomFormula"),"value"]
+  #   if(length(grep("designation", designationEffectType)) > 0){
+  #     deregress=TRUE
+  #   }else{ # BLUE
+  #     deregress=FALSE
+  #   }
+  # }else{ # mtaLmms
+  #   designationEffectType <- modelingInput[which(modelingInput$parameter == "randomFormula"),"value"]
+  #   if(length(grep("grp\\(designation\\)", designationEffectType)) > 0){
+  #     deregress=TRUE
+  #   }else{ # BLUE
+  #     deregress=FALSE
+  #   }
+  # }
 
   # remove traits that are not actually present in the dataset
   traitToRemove <- character()
@@ -191,9 +197,11 @@ rggMackay <- function(
         }
         gg.y1<- sort(unique(mydataSub[,fixedTerm]), decreasing = FALSE)[1] # first year
         gg.yn <- sort(unique(mydataSub[,fixedTerm]), decreasing = TRUE)[1] # last year
-        ntrial <- phenoDTfile$metrics # number of trials
+        ntrial <- phenoDTfile$predictions # number of trials
+        ntrial <- ntrial[which(ntrial$analysisId ==analysisId),]
         ntrial <- ntrial[which(ntrial$trait ==iTrait),]
-        ntrial <- length(unique(ntrial$environment))
+        ntrial <- ntrial[which(ntrial$effectType =="environment"),]
+        ntrial <- length(unique(ntrial$designation))
         phenoDTfile$metrics <- rbind(phenoDTfile$metrics,
                                      data.frame(module="rgg",analysisId=rggAnalysisId, trait=iTrait, environment="across",
                                                 parameter=c("ggSlope","ggInter", "gg%(first.year)","gg%(average.year)","r2","pVal","nTrial","initialYear","lastYear"), method=ifelse(deregress,"blup+dereg","mackay"),

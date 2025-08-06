@@ -3,10 +3,10 @@ importFrom("graphics", "axis", "lines", "par", "points", "title")
 importFrom("stats", "cov", "dist", "median", "model.matrix", "optimize", "pbeta", "ppoints", "predict", "smooth.spline","var")
 export(
        traitTransformation,newOutliersFun, modifExpDesign, equalizeTraits,
-       staLMM, metLMM, metLMMsolver, mtaLmmFlex, indexDesire, baseIndex, ocs, rggMackay, rggPiepho, pgg,
+       staLMM, metLMM, metLMMsolver, mtaLmmFlex, indexDesire, baseIndex, ocs, gpcp, rggMackay, rggPiepho, pgg,
        singleCrossMat, nasaPowerExtraction, summaryWeather, metASREML,
        numberFounders, individualVerification, markerAssistedSelection,
-       gwas,manhattanPlot,freeFunction
+       gwas,manhattanPlot,freeFunction, premetLMMsolver, postmetLMMsolver
        )
 
 
