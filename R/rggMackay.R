@@ -143,12 +143,12 @@ rggMackay <- function(
         mydataSub$w <- 1/(mydataSub$stdError)
         # remove extreme outliers or influential points
         hh<-split(mydataSub,mydataSub[,fixedTerm])
-        hh <- lapply(hh,function(x){
-          outlier <- boxplot.stats(x=x[, "predictedValue"],coef=1.5 )$out
-          bad <- which(x$predictedValue %in% outlier)
-          if(length(bad) >0){out <- x[-bad,]}else{out<-x}
-          return(out)
-        })
+        #hh <- lapply(hh,function(x){
+        #  outlier <- boxplot.stats(x=x[, "predictedValue"],coef=1.5 )$out
+        #  bad <- which(x$predictedValue %in% outlier)
+        #  if(length(bad) >0){out <- x[-bad,]}else{out<-x}
+        #  return(out)
+        #})
 
         if(partition){
           p1 <- p2 <- p2b <- p3 <- p3b <- p4 <- p5 <- p6 <- p7 <- p8 <- numeric();cc <- 1
