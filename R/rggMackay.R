@@ -57,8 +57,11 @@ rggMackay <- function(
   }
   # reduce dataset by top entries selected
   if(nrow(mydata) == 0){stop("No data to work with with the specified parameters. You may want to check the yearsToUse parameter. Maybe you have not mapped the 'yearOfOrigin' column in the Data Retrieval tad under the 'Pedigree' section.",call. = FALSE)}
-  if(forceRules){ # if we wnforce ABI rules for minimum years of data
-    if(length(unique(na.omit(mydata[,fixedTerm]))) < 5){stop("Less than 5 years of data have been detected. Realized genetic gain analysis cannot proceed.Maybe you have not mapped the 'yearOfOrigin' column in the Data Retrieval tad under the 'Pedigree' section. ", call. = FALSE)}
+  if(forceRules){ 
+    if(length(unique(na.omit(mydata[,fixedTerm]))) < 5){
+      warning("Less than 5 years of data have been detected. Make sure you have mapped the 'yearOfOrigin' column in the Data Retrieval tad under the 'Pedigree' section. If yes, interpret results with caution ", call. = FALSE)
+      less_than_five = TRUE
+      }else{less_than_five = FALSE}
   }else{
     if(length(unique(na.omit(mydata[,fixedTerm]))) <= 1){stop("Only one year of data. Realized genetic gain analysis cannot proceed.Maybe you have not mapped the 'yearOfOrigin' column in the Data Retrieval tad under the 'Pedigree' section. ", call. = FALSE)}
   }
@@ -210,7 +213,7 @@ rggMackay <- function(
                                      )
         )
         currentModeling <- data.frame(module="rgg", analysisId=rggAnalysisId,trait=iTrait, environment="across",
-                                      parameter=c("deregression","partitionedModel"), value=c(deregress, partition))
+                                      parameter=c("deregression","partitionedModel","lessThanFiveYears"), value=c(deregress, partition,less_than_five))
         phenoDTfile$modeling <- rbind(phenoDTfile$modeling,currentModeling[,colnames(phenoDTfile$modeling)] )
         myPreds <- mydataSub[,colnames(phenoDTfile$predictions)]
         myPreds$module <- "rgg"
