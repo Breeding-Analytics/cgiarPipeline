@@ -365,12 +365,12 @@ metASREML <- function(phenoDTfile = NULL,
           )))
           randomTermModel[[iTrait]] = randomTermprov
           if (length(randomTermprov) != 0 | !is.null(randomTermprov)) {
-            randomTermTrait[[iTrait]] <- paste(randomTermTrait[[iTrait]], randomTermprov[1], sep =
-                                                 " ")
-            for (iRand in 2:length(randomTermprov)) {
-              # for each element in the list # iFixed=1
-              randomTermTrait[[iTrait]] <- paste(randomTermTrait[[iTrait]], randomTermprov[iRand], sep =
-                                                   " + ")
+            randomTermTrait[[iTrait]] <- paste(randomTermTrait[[iTrait]], randomTermprov[1], sep =" ")
+            if (length(randomTermprov)>1){
+              for (iRand in 2:length(randomTermprov)) {
+                # for each element in the list # iFixed=1
+                randomTermTrait[[iTrait]] <- paste(randomTermTrait[[iTrait]], randomTermprov[iRand], sep =" + ")
+              }
             }
           }
           #randomTermTrait[[iTrait]] <- paste0(randomTermTrait[[iTrait]], ",")
@@ -1095,3 +1095,4 @@ metASREML <- function(phenoDTfile = NULL,
   
   return(phenoDTfile)
 }
+
