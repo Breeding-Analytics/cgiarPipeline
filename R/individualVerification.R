@@ -200,6 +200,8 @@ individualVerification <- function(
       tmp$HasGeno = 1
     }
     
+    tmp$parHetFilter = 0
+    
     #Update objects
     res$metricsInd = rbind(res$metricsInd,tmp)
     fail_pro = fail_pro[!fail_pro %in% fail_ped]
@@ -219,6 +221,8 @@ individualVerification <- function(
       tmp$HasGeno = 1
     }
     
+    tmp$parHetFilter = 0 
+    
     #Update objects
     res$metricsInd = rbind(res$metricsInd,tmp)
     fail_pro = fail_pro[!fail_pro %in% fail_par]
@@ -231,6 +235,7 @@ individualVerification <- function(
     tmp$HasPed = 1
     tmp$ParentHasGeno = 1
     tmp$HasGeno = 0
+    tmp$parHetFilter = 1
     
     #Update objects
     res$metricsInd = rbind(res$metricsInd,tmp)
