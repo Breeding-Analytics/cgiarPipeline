@@ -87,6 +87,14 @@ individualVerification <- function(
   cross_filt$Var2 = as.factor(cross_filt$Var2)
   cross_filt$hybrid = as.factor(cross_filt$hybrid)
   
+  lev <- rownames(Markers)
+  lev_fem <- lev[lev %in% cross_filt$Var1]
+  lev_mal <- lev[lev %in% cross_filt$Var2]
+
+  # enforce that order in the design matrix
+  cross_filt$Var1 <- factor(cross_filt$Var1, levels = lev_fem)
+  cross_filt$Var2 <- factor(cross_filt$Var2, levels = lev_mal)
+  
   ## now build the marker matrices for mother, fathers and progeny
   Markers <- Matrix::Matrix(data.matrix(Markers), sparse = TRUE)
   # mother matrix
