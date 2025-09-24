@@ -57,8 +57,11 @@ rggMackay <- function(
   }
   # reduce dataset by top entries selected
   if(nrow(mydata) == 0){stop("No data to work with with the specified parameters. You may want to check the yearsToUse parameter. Maybe you have not mapped the 'yearOfOrigin' column in the Data Retrieval tad under the 'Pedigree' section.",call. = FALSE)}
-  if(forceRules){ # if we wnforce ABI rules for minimum years of data
-    if(length(unique(na.omit(mydata[,fixedTerm]))) < 5){stop("Less than 5 years of data have been detected. Realized genetic gain analysis cannot proceed.Maybe you have not mapped the 'yearOfOrigin' column in the Data Retrieval tad under the 'Pedigree' section. ", call. = FALSE)}
+  if(forceRules){ 
+    if(length(unique(na.omit(mydata[,fixedTerm]))) < 5){
+      warning("Less than 5 years of data have been detected. Make sure you have mapped the 'yearOfOrigin' column in the Data Retrieval tad under the 'Pedigree' section. If yes, interpret results with caution ", call. = FALSE)
+      less_than_five = TRUE
+      }else{less_than_five = FALSE}
   }else{
     if(length(unique(na.omit(mydata[,fixedTerm]))) <= 1){stop("Only one year of data. Realized genetic gain analysis cannot proceed.Maybe you have not mapped the 'yearOfOrigin' column in the Data Retrieval tad under the 'Pedigree' section. ", call. = FALSE)}
   }
@@ -143,12 +146,12 @@ rggMackay <- function(
         mydataSub$w <- 1/(mydataSub$stdError)
         # remove extreme outliers or influential points
         hh<-split(mydataSub,mydataSub[,fixedTerm])
-        hh <- lapply(hh,function(x){
-          outlier <- boxplot.stats(x=x[, "predictedValue"],coef=1.5 )$out
-          bad <- which(x$predictedValue %in% outlier)
-          if(length(bad) >0){out <- x[-bad,]}else{out<-x}
-          return(out)
-        })
+        #hh <- lapply(hh,function(x){
+        #  outlier <- boxplot.stats(x=x[, "predictedValue"],coef=1.5 )$out
+        #  bad <- which(x$predictedValue %in% outlier)
+        #  if(length(bad) >0){out <- x[-bad,]}else{out<-x}
+        #  return(out)
+        #})
 
         if(partition){
           p1 <- p2 <- p2b <- p3 <- p3b <- p4 <- p5 <- p6 <- p7 <- p8 <- numeric();cc <- 1
@@ -210,7 +213,7 @@ rggMackay <- function(
                                      )
         )
         currentModeling <- data.frame(module="rgg", analysisId=rggAnalysisId,trait=iTrait, environment="across",
-                                      parameter=c("deregression","partitionedModel"), value=c(deregress, partition))
+                                      parameter=c("deregression","partitionedModel","lessThanFiveYears"), value=c(deregress, partition,less_than_five))
         phenoDTfile$modeling <- rbind(phenoDTfile$modeling,currentModeling[,colnames(phenoDTfile$modeling)] )
         myPreds <- mydataSub[,colnames(phenoDTfile$predictions)]
         myPreds$module <- "rgg"
