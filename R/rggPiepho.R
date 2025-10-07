@@ -186,7 +186,7 @@ rggPiepho <- function(
           seb1 <- mixCoeff$yearOfOrigin[1,"se"]
           seb0 <- mixCoeff$`(Intercept)`[1,"se"]
           baseline <- b0 + ( b1*min(as.numeric(mydataSub2[which(mydataSub2$trait == iTrait),fixedTerm]) , na.rm=TRUE ))
-          baselineAverageYear <- b0 + ( b1*min(as.numeric(mydataSub2[which(mydataSub2$trait == iTrait),fixedTerm]) , na.rm=TRUE ))
+          baselineAverageYear <- b0 + ( b1*mean(as.numeric(mydataSub2[which(mydataSub2$trait == iTrait),fixedTerm]) , na.rm=TRUE ))
           b1Perc <- round(( b1 /baseline) * 100,3)
           b1PercAverageYear <- round(( b1 /baselineAverageYear) * 100,3)
           b1PercSe <- round((seb1/baseline) * 100,3)
