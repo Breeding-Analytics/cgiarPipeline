@@ -101,6 +101,65 @@ rggPiepho <- function(
   #   }
   # }
   
+  #Get intercept
+  preds_this <- phenoDTfile$predictions[phenoDTfile$predictions$analysisId == analysisId, , drop = FALSE]
+  
+  # Intercept μ by trait
+  mu_by_trait <- tapply(
+    preds_this$predictedValue[
+      preds_this$effectType == "(Intercept)" & preds_this$environment == "(Intercept)"
+    ],
+    preds_this$trait[
+      preds_this$effectType == "(Intercept)" & preds_this$environment == "(Intercept)"
+    ],
+    mean
+  )
+  
+  #Helper functions to use it to "clean" blups from fixed effects
+  get_fixed_main_terms <- function(fixed_formula_chr) {
+    if (!length(fixed_formula_chr)) return(character())
+    ff <- try(stats::as.formula(fixed_formula_chr[1]), silent = TRUE)
+    if (inherits(ff, "try-error")) return(character())
+    tt <- attr(stats::terms(ff), "term.labels")   # includes interactions
+    # keep ONLY main effects (drop any term with ':')
+    setdiff(tt[!grepl(":", tt, fixed = TRUE)], character(0))
+  }
+  
+  get_random_interactions_with_designation <- function(random_formula_chr) {
+    # extract inside all grp(...) blocks, split by '+', then split terms by ':'
+    if (!length(random_formula_chr)) return(list())
+    rf <- random_formula_chr[1]
+    grp_inside <- unlist(regmatches(rf, gregexpr("grp\\(([^)]*)\\)", rf, perl = TRUE)))
+    if (!length(grp_inside)) return(list())
+    # strip 'grp(' and ')'
+    insides <- gsub("^grp\\(|\\)$", "", grp_inside)
+    # split by '+' at top level
+    raw_terms <- unlist(strsplit(insides, "\\+", fixed = FALSE))
+    raw_terms <- trimws(raw_terms)
+    # split each raw term by ':' -> vectors of factor names
+    term_lists <- lapply(raw_terms, function(s) trimws(unlist(strsplit(s, ":", fixed = TRUE))))
+    # keep only those that include 'designation' and at least one other factor
+    Filter(function(v) any(v == "designation") && length(v) >= 2, term_lists)
+  }
+  
+  get_fixed_blues_table <- function(trait_name, effect_name) {
+    subset(preds_this,
+           trait == trait_name &
+             effectType == effect_name &
+             environment == "(Intercept)",
+           select = c("designation", "predictedValue"))
+  }
+  
+  choose_levels_for_factor <- function(mydataSub, v, blues_tbl) {
+    if (v %in% names(mydataSub)) {
+      levs <- unique(as.character(mydataSub[[v]]))
+      levs <- intersect(levs, as.character(blues_tbl$designation))
+      if (length(levs)) return(levs)
+    }
+    # fallback: all levels present in BLUEs
+    as.character(blues_tbl$designation)
+  }
+  
   # remove traits that are not actually present in the dataset
   traitToRemove <- character()
   for(k in 1:length(trait)){
@@ -123,7 +182,45 @@ rggPiepho <- function(
     # subset data
     mydataSub <- droplevels(mydata[which(mydata$trait == iTrait),])
     mydataSub$designation <- as.factor(mydataSub$designation)
-    mydataSub$predictedValue.d <- mydataSub$predictedValue/mydataSub$rel
+    
+    #Get intercept and fixed effect part from BLUPs
+    ## pull the actual formulas MTA stored for this trait
+    fixed_formula_chr  <- modelingInput$value[modelingInput$trait == iTrait &
+                                                modelingInput$parameter == "fixedFormula"]
+    random_formula_chr <- modelingInput$value[modelingInput$trait == iTrait &
+                                                modelingInput$parameter == "randomFormula"]
+    
+    fixed_main <- get_fixed_main_terms(fixed_formula_chr)
+    rand_ints  <- get_random_interactions_with_designation(random_formula_chr)
+    
+    # collect all non-designation factors that co-occur with designation in random
+    co_factors <- unique(unlist(lapply(rand_ints, function(v) setdiff(v, "designation"))))
+    if (!length(co_factors)) co_factors <- character()
+    
+    # overlap with fixed MAIN effects (mirrors MTA's feToAdd intersection by names)
+    overlap_fixed <- intersect(co_factors, fixed_main)
+    
+    # intercept μ for this trait
+    mu <- as.numeric(mu_by_trait[iTrait]); if (!is.finite(mu)) mu <- 0
+    
+    sum_dev <- 0
+    for (v in overlap_fixed) {
+      blues_v <- get_fixed_blues_table(iTrait, v)
+      if (!nrow(blues_v)) next
+      # deviation = (BLUE including μ) - μ => subtract μ
+      blues_v$dev <- blues_v$predictedValue - mu
+      # levels to average over
+      levs <- choose_levels_for_factor(mydataSub, v, blues_v)
+      if (!length(levs)) next
+      dev_v <- mean(blues_v$dev[match(levs, blues_v$designation)], na.rm = TRUE)
+      if (is.finite(dev_v)) sum_dev <- sum_dev + dev_v
+    }
+    
+    #Deregressed BLUPS
+    fixed_part <- mu + sum_dev
+    centered <- mydataSub$predictedValue - fixed_part
+    mydataSub$predictedValue.d <- fixed_part + centered/mydataSub$rel
+   
     mydataSub$yearOfOrigin <- as.numeric(mydataSub$yearOfOrigin)
     for(iMetaCol in colnames(otherMetaCols)){
       mydataSub[,iMetaCol] <- as.factor(mydataSub[,iMetaCol])
