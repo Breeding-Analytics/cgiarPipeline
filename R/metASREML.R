@@ -605,6 +605,7 @@ metASREML <- function(phenoDTfile = NULL,
     }
     #Random terms interaction
     subgroupInt = c()
+    calcGenCorr=c()
     only2 = which(lapply(randomTerm, length) == 2)
     if(length(only2)!=0){
       for (sb2 in 1:length(only2)) {
@@ -615,10 +616,64 @@ metASREML <- function(phenoDTfile = NULL,
             ":",
             x_option2(covMod[[only2[sb2]]][2], randomTerm[[only2[sb2]]][2], nFA[[only2[sb2]]])
           )
+          if (covMod[[only2[sb2]]][1]=="Structure model_fa" | covMod[[only2[sb2]]][2]=="Structure model_fa"){ 
+            calcGenCorr[sb2]=nFA[[only2[sb2]]]
+          }else{
+            calcGenCorr[sb2]=0
+          }
         }
       }
     }
     
+    calcGenCorr=calcGenCorr[calcGenCorr != 0]
+    if (length(calcGenCorr)==1){
+      env_levels=levels(mydataSub$environment)
+      # Extract coefficients (loadings + specific variances)
+      coefs <- summary(mix)$varcomp
+      # Create matrix for loadings
+      Lambda <- matrix(NA, nrow = length(env_levels), ncol = calcGenCorr,
+                       dimnames = list(env_levels, paste0("FA", 1:calcGenCorr)))
+      # Fill Lambda with loadings
+      for (f in 1:calcGenCorr) {
+        for (e in env_levels) {
+          pat <- paste0(e,"!fa",f)
+          val <- coefs[grep(pat, rownames(coefs)), "component"]
+          if (length(val) == 1) {
+            Lambda[e, f] <- val
+          }
+        }
+      }
+      # Extract specific variances (Ψ)
+      psi <- numeric(length(env_levels))
+      names(psi) <- env_levels
+      for (e in env_levels) {
+        pat <- paste0(e,"!var")
+        val <- coefs[grep(pat, rownames(coefs)), "component"]
+        if (length(val) == 1) {
+          psi[e] <- val
+        }
+      }
+      # Genetic covariance matrix: G = Lambda %*% t(Lambda) + diag(psi)
+      G <- Lambda %*% t(Lambda) + diag(psi)
+      rownames(G) <- colnames(G) <- env_levels
+      # Genetic correlation matrix
+      D <- diag(1 / sqrt(diag(G)))
+      cor_mat <- D %*% G %*% D
+      rownames(cor_mat) <- colnames(cor_mat) <- env_levels
+      upper <- which(upper.tri(cor_mat), arr.ind = TRUE)
+      prov <- data.frame(
+        designation = rownames(cor_mat)[upper[,1]],
+        predictedValue = cor_mat[upper],
+        stdError = rep(NA, dim(upper)[1]),
+        reliability = rep(NA, dim(upper)[1]),
+        trait = iTrait,
+        effectType = "GenCorrMat" ,
+        environment = colnames(cor_mat)[upper[,2]],
+        entryType = "unknown"
+      )
+      pp[["GenCorrMat"]] <- prov
+    }
+        
     if (gsca == T) {
       gca = summary(mix, coef = TRUE)$coef.random
       prov <- data.frame(
@@ -1095,4 +1150,5 @@ metASREML <- function(phenoDTfile = NULL,
   
   return(phenoDTfile)
 }
+
 
