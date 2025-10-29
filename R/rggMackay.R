@@ -301,11 +301,12 @@ rggMackay <- function(
         }
         gg.y1<- sort(unique(mydataSub[,fixedTerm]), decreasing = FALSE)[1] # first year
         gg.yn <- sort(unique(mydataSub[,fixedTerm]), decreasing = TRUE)[1] # last year
-        ntrial <- phenoDTfile$predictions # number of trials
+        ntrial <- phenoDTfile$modeling # number of trials
         ntrial <- ntrial[which(ntrial$analysisId ==analysisId),]
         ntrial <- ntrial[which(ntrial$trait ==iTrait),]
-        ntrial <- ntrial[which(ntrial$effectType =="environment"),]
-        ntrial <- length(unique(ntrial$designation))
+        ntrial <- ntrial[which(ntrial$parameter == "includedInMta"),]
+        ntrial <- ntrial[which(ntrial$value == "TRUE"),]
+        ntrial <- length(unique(ntrial$environment))
         phenoDTfile$metrics <- rbind(phenoDTfile$metrics,
                                      data.frame(module="rgg",analysisId=rggAnalysisId, trait=iTrait, environment="across",
                                                 parameter=c("ggSlope","ggInter", "gg%(first.year)","gg%(average.year)","r2","pVal","nTrial","initialYear","lastYear"), method=ifelse(deregress,"blup+dereg","mackay"),
