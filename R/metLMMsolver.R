@@ -65,7 +65,9 @@ metLMMsolver <- function(
     if( any( covars %in% c("genoA","genoAD", "weather","pedigree", traitsForExpCovariates ) ) ){
       if(verbose){message("Checking and calculating kernels requested")}
       ## MARKER KERNEL
-      Markers <- as.matrix(phenoDTfile$data$geno) # in form of covariates
+      Markers <- NULL
+      if(!is.null(phenoDTfile$data$geno))
+        Markers <- as.matrix(phenoDTfile$data$geno) # in form of covariates
       if(any(c("genoA","genoAD") %in% covars) & !is.null(Markers)){
         classify <- unique(unlist(randomTerm)[which(unlist(expCovariates) %in% c("genoA","genoAD","genoD") )])
         # eventually we may have to do a for loop
