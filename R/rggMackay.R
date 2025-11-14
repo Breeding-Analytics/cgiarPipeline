@@ -69,8 +69,11 @@ rggMackay <- function(
   modelingInput <- phenoDTfile$modeling
   modelingInput <- modelingInput[which(modelingInput$analysisId == analysisId),]
   designationEffectType <- modelingInput[which(modelingInput$parameter == "randomFormula"),"value"]
-  if(length(grep("designation", designationEffectType)) > 0){
-    deregress=TRUE
+  termsfind<-strsplit(designationEffectType,"\\+")[[1]]
+  alone<-stringr::str_detect(termsfind,":")
+  termsfind<-termsfind[which(alone==F)]
+  if(length(grep("designation", termsfind)) > 0){
+      deregress=TRUE
   }else{ # BLUE
     deregress=FALSE
   }
