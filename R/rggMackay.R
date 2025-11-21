@@ -69,8 +69,11 @@ rggMackay <- function(
   modelingInput <- phenoDTfile$modeling
   modelingInput <- modelingInput[which(modelingInput$analysisId == analysisId),]
   designationEffectType <- modelingInput[which(modelingInput$parameter == "randomFormula"),"value"]
-  if(length(grep("designation", designationEffectType)) > 0){
-    deregress=TRUE
+  termsfind<-strsplit(designationEffectType,"\\+")[[1]]
+  alone<-stringr::str_detect(termsfind,":")
+  termsfind<-termsfind[which(alone==F)]
+  if(length(grep("designation", termsfind)) > 0){
+      deregress=TRUE
   }else{ # BLUE
     deregress=FALSE
   }
@@ -105,30 +108,61 @@ rggMackay <- function(
   )
   
   #Helper functions to use it to "clean" blups from fixed effects
+  split_interaction <- function(s) {
+    x <- trimws(unlist(strsplit(s, "[:_]", perl = TRUE)))
+    x[nzchar(x)]
+  }
+  
   get_fixed_main_terms <- function(fixed_formula_chr) {
     if (!length(fixed_formula_chr)) return(character())
     ff <- try(stats::as.formula(fixed_formula_chr[1]), silent = TRUE)
     if (inherits(ff, "try-error")) return(character())
     tt <- attr(stats::terms(ff), "term.labels")   # includes interactions
-    # keep ONLY main effects (drop any term with ':')
+    # keep ONLY main effects (drop any term with '_')
     setdiff(tt[!grepl(":", tt, fixed = TRUE)], character(0))
   }
   
   get_random_interactions_with_designation <- function(random_formula_chr) {
-    # extract inside all grp(...) blocks, split by '+', then split terms by ':'
     if (!length(random_formula_chr)) return(list())
     rf <- random_formula_chr[1]
-    grp_inside <- unlist(regmatches(rf, gregexpr("grp\\(([^)]*)\\)", rf, perl = TRUE)))
-    if (!length(grp_inside)) return(list())
-    # strip 'grp(' and ')'
-    insides <- gsub("^grp\\(|\\)$", "", grp_inside)
-    # split by '+' at top level
-    raw_terms <- unlist(strsplit(insides, "\\+", fixed = FALSE))
-    raw_terms <- trimws(raw_terms)
-    # split each raw term by ':' -> vectors of factor names
-    term_lists <- lapply(raw_terms, function(s) trimws(unlist(strsplit(s, ":", fixed = TRUE))))
-    # keep only those that include 'designation' and at least one other factor
-    Filter(function(v) any(v == "designation") && length(v) >= 2, term_lists)
+    
+    term_lists <- list()
+    
+    ## 1) Terms inside grp(...)
+    grp_matches <- gregexpr("grp\\(([^)]*)\\)", rf, perl = TRUE)
+    grp_inside  <- regmatches(rf, grp_matches)[[1]]
+    
+    if (length(grp_inside)) {
+      insides <- gsub("^grp\\(|\\)$", "", grp_inside)
+      raw_terms_grp <- unlist(strsplit(insides, "\\+"))
+      raw_terms_grp <- trimws(raw_terms_grp)
+      raw_terms_grp <- raw_terms_grp[nzchar(raw_terms_grp)]
+      term_lists_grp <- lapply(raw_terms_grp, split_interaction)
+      term_lists <- c(term_lists, term_lists_grp)
+    }
+    
+    ## 2) Terms *outside* grp(...)
+    rf_outside <- rf
+    # remove all grp(...) chunks from the formula string
+    regmatches(rf_outside, grp_matches) <- ""
+    
+    # drop leading "~" if present
+    rf_outside <- sub("^\\s*~", "", rf_outside)
+    
+    raw_terms_out <- unlist(strsplit(rf_outside, "\\+"))
+    raw_terms_out <- trimws(raw_terms_out)
+    raw_terms_out <- raw_terms_out[nzchar(raw_terms_out)]
+    
+    if (length(raw_terms_out)) {
+      term_lists_out <- lapply(raw_terms_out, split_interaction)
+      term_lists <- c(term_lists, term_lists_out)
+    }
+    
+    ## 3) Keep only interactions with designation + at least one other factor
+    Filter(
+      function(v) any(v == "designation") && length(v) >= 2,
+      term_lists
+    )
   }
   
   get_fixed_blues_table <- function(trait_name, effect_name) {
@@ -136,7 +170,7 @@ rggMackay <- function(
            trait == trait_name &
              effectType == effect_name &
              environment == "(Intercept)",
-           select = c("designation", "predictedValue"))
+           select = c("designation","predictedValue"))
   }
   
   choose_levels_for_factor <- function(mydataSub, v, blues_tbl) {
@@ -145,7 +179,6 @@ rggMackay <- function(
       levs <- intersect(levs, as.character(blues_tbl$designation))
       if (length(levs)) return(levs)
     }
-    # fallback: all levels present in BLUEs
     as.character(blues_tbl$designation)
   }
 
@@ -192,6 +225,22 @@ rggMackay <- function(
     fixed_main <- get_fixed_main_terms(fixed_formula_chr)
     rand_ints  <- get_random_interactions_with_designation(random_formula_chr)
     
+    rf <- random_formula_chr[1]
+    
+    has_main_desig_grp <- grepl(
+      "grp\\([^)]*\\bdesignation\\b(?![^)]*[:_])",
+      rf,
+      perl = TRUE
+    )
+    
+    rf_outside <- gsub("grp\\([^)]*\\)", "", rf, perl = TRUE)
+    rf_outside <- sub("^\\s*~", "", rf_outside)
+    terms_outside <- trimws(strsplit(rf_outside, "\\+")[[1]])
+    terms_outside <- terms_outside[nzchar(terms_outside)]
+    
+    has_main_desig_outside <- any(terms_outside == "designation")
+    has_main_desig <- has_main_desig_grp || has_main_desig_outside
+    
     # collect all non-designation factors that co-occur with designation in random
     co_factors <- unique(unlist(lapply(rand_ints, function(v) setdiff(v, "designation"))))
     if (!length(co_factors)) co_factors <- character()
@@ -203,16 +252,18 @@ rggMackay <- function(
     mu <- as.numeric(mu_by_trait[iTrait]); if (!is.finite(mu)) mu <- 0
     
     sum_dev <- 0
-    for (v in overlap_fixed) {
-      blues_v <- get_fixed_blues_table(iTrait, v)
-      if (!nrow(blues_v)) next
-      # deviation = (BLUE including μ) - μ => subtract μ
-      blues_v$dev <- blues_v$predictedValue - mu
-      # levels to average over
-      levs <- choose_levels_for_factor(mydataSub, v, blues_v)
-      if (!length(levs)) next
-      dev_v <- mean(blues_v$dev[match(levs, blues_v$designation)], na.rm = TRUE)
-      if (is.finite(dev_v)) sum_dev <- sum_dev + dev_v
+    
+    if (!has_main_desig && length(overlap_fixed)) {
+      for (v in overlap_fixed) {
+        blues_v <- get_fixed_blues_table(iTrait, v)
+        if (!nrow(blues_v)) next
+        # MTA writes fixed BLUEs including μ; subtract μ to get deviations
+        blues_v$dev <- blues_v$predictedValue - mu
+        levs <- choose_levels_for_factor(mydataSub, v, blues_v)
+        if (!length(levs)) next
+        dev_v <- mean(blues_v$dev[match(levs, blues_v$designation)], na.rm = TRUE)
+        if (is.finite(dev_v)) sum_dev <- sum_dev + dev_v
+      }
     }
     
     fixed_part <- mu + sum_dev
@@ -258,8 +309,10 @@ rggMackay <- function(
                 mix <- lm(as.formula(fix), data=mydataSub2)
                 sm <- summary(mix)
                 p1[cc] <- sm$coefficients[2,1]*ifelse(deregress,deregressWeight,1)
-                baselineFirstYear <- mix$coefficients[1] + ( (mix$coefficients[2]*ifelse(deregress,deregressWeight,1))*min(as.numeric(mydataSub[which(mydataSub$trait == iTrait),fixedTerm]), na.rm=TRUE ))
-                baselineAverageYear <- mix$coefficients[1] + ( (mix$coefficients[2]*ifelse(deregress,deregressWeight,1))*mean(as.numeric(mydataSub[which(mydataSub$trait == iTrait),fixedTerm]) , na.rm=TRUE ))
+                #baselineFirstYear <- mix$coefficients[1] + ( (mix$coefficients[2]*ifelse(deregress,deregressWeight,1))*min(as.numeric(mydataSub[which(mydataSub$trait == iTrait),fixedTerm]), na.rm=TRUE ))
+                #baselineAverageYear <- mix$coefficients[1] + ( (mix$coefficients[2]*ifelse(deregress,deregressWeight,1))*mean(as.numeric(mydataSub[which(mydataSub$trait == iTrait),fixedTerm]) , na.rm=TRUE ))
+                baselineFirstYear <- min(as.numeric(mydataSub[which(mydataSub$trait == iTrait),fixedTerm]), na.rm=TRUE )
+                baselineAverageYear <- mean(as.numeric(mydataSub[which(mydataSub$trait == iTrait),fixedTerm]) , na.rm=TRUE)
                 p2[cc] <- round(( (mix$coefficients[2]*ifelse(deregress,deregressWeight,1)) /baselineFirstYear) * 100,3)
                 p2b[cc] <- round(( (mix$coefficients[2]*ifelse(deregress,deregressWeight,1)) /baselineAverageYear) * 100,3)
                 p3[cc] <- round((sm$coefficients[2,2]/baselineFirstYear) * 100,3)
@@ -284,6 +337,8 @@ rggMackay <- function(
           gg <- sm$coefficients[2,1]*ifelse(deregress,deregressWeight,1)
           baselineFirstYear <- mix$coefficients[1] + ( (mix$coefficients[2]*ifelse(deregress,deregressWeight,1))*min(as.numeric(mydataSub[which(mydataSub$trait == iTrait),fixedTerm]) , na.rm=TRUE ))
           baselineAverageYear <- mix$coefficients[1] + ( (mix$coefficients[2]*ifelse(deregress,deregressWeight,1))*mean(as.numeric(mydataSub[which(mydataSub$trait == iTrait),fixedTerm]) , na.rm=TRUE ))
+          #baselineFirstYear <-min(as.numeric(mydataSub[which(mydataSub$trait == iTrait),fixedTerm]) , na.rm=TRUE )
+          #baselineAverageYear <- mean(as.numeric(mydataSub[which(mydataSub$trait == iTrait),fixedTerm]) , na.rm=TRUE )
           ggPercentage <- round(( (mix$coefficients[2]*ifelse(deregress,deregressWeight,1)) /baselineFirstYear) * 100,3)
           ggPercentageAverageYear <- round(( (mix$coefficients[2]*ifelse(deregress,deregressWeight,1)) /baselineAverageYear) * 100,3)
           seGgPercentage <- round((sm$coefficients[2,2]/baselineFirstYear) * 100,3)
@@ -296,11 +351,12 @@ rggMackay <- function(
         }
         gg.y1<- sort(unique(mydataSub[,fixedTerm]), decreasing = FALSE)[1] # first year
         gg.yn <- sort(unique(mydataSub[,fixedTerm]), decreasing = TRUE)[1] # last year
-        ntrial <- phenoDTfile$predictions # number of trials
+        ntrial <- phenoDTfile$modeling # number of trials
         ntrial <- ntrial[which(ntrial$analysisId ==analysisId),]
         ntrial <- ntrial[which(ntrial$trait ==iTrait),]
-        ntrial <- ntrial[which(ntrial$effectType =="environment"),]
-        ntrial <- length(unique(ntrial$designation))
+        ntrial <- ntrial[which(ntrial$parameter == "includedInMta"),]
+        ntrial <- ntrial[which(ntrial$value == "TRUE"),]
+        ntrial <- length(unique(ntrial$environment))
         phenoDTfile$metrics <- rbind(phenoDTfile$metrics,
                                      data.frame(module="rgg",analysisId=rggAnalysisId, trait=iTrait, environment="across",
                                                 parameter=c("ggSlope","ggInter", "gg%(first.year)","gg%(average.year)","r2","pVal","nTrial","initialYear","lastYear"), method=ifelse(deregress,"blup+dereg","mackay"),

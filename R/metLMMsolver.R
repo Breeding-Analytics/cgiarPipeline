@@ -19,6 +19,68 @@ metLMMsolver <- function(
     return(res)
   }
   sommerVersion <- as.numeric(paste(strsplit(as.character(packageVersion("sommer")),"[.]")[[1]][1:2], collapse = ""))
+  
+  .tokens_from_terms <- function(termList) {
+    if (is.null(termList) || length(termList) == 0) return(character())
+    out <- unlist(lapply(termList, function(v) unlist(strsplit(v, ":", fixed = TRUE))), use.names = FALSE)
+    unique(out[nzchar(out)])
+  }
+  
+  ## configurable safety limits 
+  MAX_DENSE_BYTES <- getOption("bioflow.max_dense_bytes", 10 * 1024^3)  # ~6 GB
+  MAX_PROJ_COLS   <- getOption("bioflow.max_proj_cols",   1e5)    # 100k columns
+  
+  ## helper: check projected size and stop 
+  .check_cross_guard <- function(n_rows, n_cols, tag) {
+    est_bytes <- as.double(n_rows) * as.double(n_cols) * 8  # double matrix
+    if (!is.finite(est_bytes) || n_cols > MAX_PROJ_COLS || est_bytes > MAX_DENSE_BYTES) {
+      stop(sprintf(
+        paste0("Model too large (", tag, "). ",
+               "Projected crossed design has ~%s rows x %s cols (≈ %.2f GB). ",
+               "Reduce factors in interaction terms or try the model without covariates"),
+        format(n_rows, big.mark=","), format(n_cols, big.mark=","), est_bytes/1073741824
+      ), call. = FALSE)
+    }
+  }
+  
+  #Helpers to get the levels of a fitted factor
+  .canon_term <- function(s, sep=":") paste(sort(strsplit(s, sep, fixed=TRUE)[[1]]), collapse=":")
+  
+  .find_ndx_key <- function(keys, query) {
+    want <- .canon_term(query, ":")
+    hit <- vapply(keys, function(k) .canon_term(k, ":") == want, logical(1))
+    if (!any(hit)) return(NA_character_)
+    keys[which(hit)[1]]
+  }
+  
+  .levels_for_term <- function(dat, term_label) {
+    # Build design matrix for this term
+    ff <- as.formula(paste0("~ 0 + ", term_label))
+    mm <- model.matrix(ff, data = dat)
+    cn <- colnames(mm)
+    
+    # Strip variable-name prefixes from the column names
+    # e.g. "designation2369:environmentNYH3y2021" -> "2369:NYH3y2021"
+    vars <- strsplit(term_label, ":", fixed = TRUE)[[1]]
+    for (v in vars) {
+      cn <- sub(paste0("^", v), "", cn)   # at the start
+      cn <- sub(paste0(":", v), ":", cn)  # after a colon
+    }
+    
+    cn
+  }
+  
+  #helper for models without covariates
+  all_none_covariates <- function(expCovariates) {
+    x <- expCovariates
+    # normalize: lower, trim, strip trailing dots
+    x <- tolower(trimws(x))
+    x <- sub("\\.*$", "", x)   # remove any number of trailing dots
+    x <- x[nzchar(x)]          # drop empty after normalization
+    ok <- length(x) == 0 || all(x == "none")
+    ok
+  }
+  
   ##########################################
   ##########################################
   ## CONTROLS FOR MISSPECIFICATION (6 lines)
@@ -65,7 +127,9 @@ metLMMsolver <- function(
     if( any( covars %in% c("genoA","genoAD", "weather","pedigree", traitsForExpCovariates ) ) ){
       if(verbose){message("Checking and calculating kernels requested")}
       ## MARKER KERNEL
-      Markers <- as.matrix(phenoDTfile$data$geno) # in form of covariates
+      Markers <- NULL
+      if(!is.null(phenoDTfile$data$geno))
+        Markers <- as.matrix(phenoDTfile$data$geno) # in form of covariates
       if(any(c("genoA","genoAD") %in% covars) & !is.null(Markers)){
         classify <- unique(unlist(randomTerm)[which(unlist(expCovariates) %in% c("genoA","genoAD","genoD") )])
         # eventually we may have to do a for loop
@@ -319,17 +383,34 @@ metLMMsolver <- function(
       if ("genoD" %in% covars & (!"inbreeding" %in% colnames(prov))) {
         prov$inbreeding <- f[match(prov$designation, names(f))]
       }
-
-      fixedTermProv <- fixedTerm
-          for(iFixed in 1:length(fixedTermProv)){ # for each element in the list # iFixed=1
-            fixedTermProv2 <- fixedTermProv[[iFixed]]
-            for(iFixed2 in  fixedTermProv2){ # for each factor in the interactions # iFixed2 = fixedTermProv2[1]
-              if(iFixed2 != "1"){
-                if( length( table(prov[,iFixed2]) ) == 1 ){ fixedTermProv[[iFixed]] <- setdiff( fixedTermProv[[iFixed]], iFixed2 )}
-              }
-            }
-          }
-          fixedTermTrait[[iTrait]] <- unique(fixedTermProv[which(unlist(lapply(fixedTermProv,length)) > 0)])
+      
+      ## Enforce factor vs covariate semantics  ---
+      ## Anything selected in Fixed/Random menus => factor,
+      ## EXCEPT explicit covariates (right-side boxes) and a tiny numeric whitelist.
+      
+      # What the user asked for on the left (Fixed/Random)
+      left_fixed_vars  <- .tokens_from_terms(fixedTerm)         # before per-trait pruning
+      left_random_vars <- .tokens_from_terms(randomTerm)
+      
+      # What the user explicitly set as covariates on the right
+      right_covars <- unique(unlist(expCovariates))  # e.g., "genoA","weather","pedigree","envIndex...", trait kernels, etc.
+      
+      # Numeric fixed terms you intend to stay numeric (add/remove as needed)
+      numeric_fixed_whitelist <- c("inbreeding", grep("^envIndex", colnames(prov), value = TRUE))
+      
+      # Columns that MUST be treated as categorical (factor) if they appear in prov
+      must_be_factor <- setdiff(unique(c(left_fixed_vars, left_random_vars)),
+                                unique(c(right_covars, numeric_fixed_whitelist)))
+      
+      # Coerce present columns in 'prov' to factor
+      to_factor <- intersect(must_be_factor, colnames(prov))
+      for (vv in to_factor) {
+        if (!is.factor(prov[[vv]])) {
+          prov[[vv]] <- factor(trimws(as.character(prov[[vv]])))
+        } else {
+          prov[[vv]] <- droplevels(prov[[vv]])
+        }
+      }
 
       if(nrow(prov) > 0){ # if after filters there's still data for this trait we can continue and save the data
         if( var(prov[,"predictedValue"], na.rm = TRUE) > 0 ){ # check that there is variance
@@ -354,6 +435,7 @@ metLMMsolver <- function(
               }
             }
           }
+          
           # any term that is modified from what user specified we remove it totally, is better than fitting something undesired
           goodTerms <- which( ( unlist(lapply(randomTerm,length)) - unlist(lapply(randomTermProv,length)) ) == 0 )
           randomTermProv <- randomTerm[goodTerms]
@@ -361,149 +443,233 @@ metLMMsolver <- function(
           if (!"genoD" %in% unlist(expCovariatesProv)) {
             randomTermProv <- unique(randomTermProv)
           }
-
-          # if reduced models reduce the datasets to the needed explanatory covariates
-          if(!is.null(randomTermProv)){
-            # reduce datasets
-            for(irandom in 1:length(randomTermProv)){ # for each element in the list # irandom=1
-              randomTermProv2 <- randomTermProv[[irandom]]
-              for(irandom2 in  1:length(randomTermProv2)){ # for each factor in the interactions # irandom2 = 1
-                # print(expCovariatesProv[[irandom]][irandom2])
-                if( expCovariatesProv[[irandom]][irandom2] == "weather"){
-                  M <- Wchol
-                }else if(expCovariatesProv[[irandom]][irandom2] %in% c("geno","genoA","genoAD") ){
-                  M <- Gchol
-                }else if(expCovariatesProv[[irandom]][irandom2] == "genoD"){
-                  M <- Dchol
-                }else if(expCovariatesProv[[irandom]][irandom2] == "pedigree"){
-                  M <- Nchol
-                }else if(expCovariatesProv[[irandom]][irandom2] %in% traitsForExpCovariates){ # Trait kernel
-                  classify <- randomTermForCovars[which(covars == expCovariatesProv[[irandom]][irandom2])]
-                  M <- TraitKernels[[expCovariatesProv[[irandom]][irandom2]]][[classify]] # Schol equivalent
-                }else{ # No kernel
-                  namesZ <- unique(prov[,randomTermProv2[irandom2]])
-                  M <- Matrix::Diagonal(n=length(namesZ)); rownames(M) <- colnames(M) <- namesZ
+          
+          use_formula = all_none_covariates(unlist(expCovariatesProv))
+          
+          #################################################################################
+          #When no covariates are used, we can just pass the formulas directly to LMMsolver
+          
+          if(use_formula){
+            # build envsProv for every random term in randomTermProv
+            envsProv <- lapply(randomTermProv, function(term) {
+              term <- term[term %in% colnames(prov)]  # drop any names not in prov
+              if (length(term) <= 1L) {
+                # single (or empty) factor: repeat "(Intercept)" once per level of that factor
+                if (length(term) == 1L) {
+                  levs1 <- sort(unique(as.character(prov[[term[1]]])))
+                  rep("(Intercept)", length(levs1))
+                } else {
+                  "(Intercept)"
                 }
-                goodLevels <- intersect(unique(prov[,randomTermProv2[irandom2]]), rownames(M) )
-                if(length(goodLevels) > 0){ # only if we make a match we reduce the dataset
-                  prov <- prov[which(prov[,randomTermProv2[irandom2]] %in% goodLevels),]
-                }else{expCovariatesProv[[irandom]][irandom2]="none"}# else we don't and change to "none" the kernel for that effect
+              } else {
+                # interaction: build level lists, drop the dimension with the most levels, expand/paste the rest
+                levlist <- lapply(term, function(v) sort(unique(as.character(prov[[v]]))))
+                nlev    <- vapply(levlist, length, integer(1))
+                drop    <- which.max(nlev)
+                keep    <- setdiff(seq_along(levlist), drop)
+                if (length(keep) == 0L) {
+                  rep("(Intercept)", nlev[drop])
+                } else {
+                  grid <- do.call(expand.grid, c(rev(levlist[keep]), stringsAsFactors = FALSE))
+                  apply(grid, 1L, function(x) paste(x, collapse = ":"))
+                }
               }
-            }
-          }
-          ## build and add the incidence matrices
-          groupingTermProv <- Mprov <- envsProv <- entryTypeProv <- list()
-          if(!is.null(randomTermProv)){
-            for(irandom in 1:length(randomTermProv)){ # for each element in the list # irandom=1
-              randomTermProv2 <- randomTermProv[[irandom]]
+            })
+            
+           
+            randomTermTrait[[iTrait]] <- unique(randomTermProv[which(unlist(lapply(randomTermProv, length)) > 0)])
+            entryTypeProv <- list()
+            
+            for(irandom in 1:length(randomTermProv)){
               expCovariatesProv2 <- expCovariatesProv[[irandom]]
-              # nExp <- numeric() # to save the number of effects
-              xxList <- Mlist <- list()
-              for(irandom2 in  1:length(randomTermProv2)){ # for each factor in the interactions # irandom2 = 2
-                # get kernel
-                if( expCovariatesProv[[irandom]][irandom2] == "weather"){
-                  M <- Wchol # Weather
-                }else if(expCovariatesProv[[irandom]][irandom2] %in% c("geno","genoA","genoAD") ){
-                  M = Gchol # Markers
-                }else if(expCovariatesProv[[irandom]][irandom2] == "genoD"){
-                  M <- Dchol
-                }else if(expCovariatesProv[[irandom]][irandom2] == "pedigree"){
-                  M <- Nchol # Pedigree
-                }else if(expCovariatesProv[[irandom]][irandom2] %in% traitsForExpCovariates){ # Trait kernel
-                  classify <- randomTermForCovars[which(covars == expCovariatesProv[[irandom]][irandom2])]
-                  M <- TraitKernels[[expCovariatesProv[[irandom]][irandom2]]][[classify]] # Schol equivalent
-                }else{ # No kernel
-                  if( unlist(lapply(prov, class))[randomTermProv2[irandom2]] %in% c("factor","character") ){
-                    namesZ <- unique(prov[,randomTermProv2[irandom2]])
-                    M <- Matrix::Diagonal(n=length(namesZ)); rownames(M) <- colnames(M) <- namesZ
-                  } else{ # numeric or integer
-                    M <- Matrix::Diagonal(n=1); rownames(M) <- colnames(M) <- randomTermProv2[irandom2]
-                  }
-                }
-                # build incidence matrix
-                if( unlist(lapply(prov, class))[randomTermProv2[irandom2]] %in% c("factor","character") ){
-                  goodLevels <- intersect(unique(prov[,randomTermProv2[irandom2]]), rownames(M) )
-                  if(length(goodLevels) == 0){ # if no match then use the regular model matrix
-                    namesZ <- unique(prov[,randomTermProv2[irandom2]])
-                    M <- Matrix::Diagonal(n=length(namesZ)); rownames(M) <- colnames(M) <- namesZ
-                  }
-                  xx = lme4breeding::redmm(x=prov[,randomTermProv2[irandom2]], M=M, nPC=0)
-                }else{
-                  if(sommerVersion < 44){
-                    xx <- sommer::isc(prov[,randomTermProv2[irandom2]])$Z
-                  }else{
-                    xx <- sommer::ism(prov[,randomTermProv2[irandom2]])$Z
-                  }
-                }
-                xxList[[irandom2]] = xx # model matrix for ith effect saved
-                Mlist[[irandom2]] = M # single factor kernel M saved
-                # if irandom > 1 expand M
-                if(irandom2 > 1){
-                  if(ncol(xxList[[irandom2-1]]) > 1){
-                    if(sommerVersion < 44){
-                      m1 <- sommer::dsc(xxList[[irandom2-1]])
-                    }else{
-                      m1 <- sommer::dsm(xxList[[irandom2-1]])
-                    }
-                  }else{
-                    if(sommerVersion < 44){
-                      m1 <- sommer::isc(xxList[[irandom2-1]][,1])
-                    }else{
-                      m1 <- sommer::ism(xxList[[irandom2-1]][,1])
-                    }
-
-                  }
-                  if(ncol(xxList[[irandom2]]) > 1){
-                    if(sommerVersion < 44){
-                      m2 <- sommer::isc(xx)
-                    }else{
-                      m2 <- sommer::ism(xx)
-                    }
-
-                  }else{
-                    if(sommerVersion < 44){
-                      m2 <- sommer::isc(xx[,1])
-                    }else{
-                      m2 <- sommer::ism(xx[,1])
-                    }
-
-                  }
-                  if(sommerVersion < 44){
-                    m3 <- sommer::vsc( m1  , m2  )
-                  }else{
-                    m3 <- sommer::vsm( m1  , m2  )
-                  }
-
-                  environmentCol <- list()
-                  for(o in 1:length(m3$Z)){environmentCol[[o]] <- rep(colnames(m3$theta)[o],nrow(M))}
-                  ff <- do.call( "cbind", m3$Z )
-                  M <- kronecker(Mlist[[irandom2-1]] , M, make.dimnames = TRUE) # update M
-                }else{
-                  ff <- xxList[[irandom2]]
-                  # M <- M
-                }
-              }
-              # compute environment column for later
-              namesForEnvs <- lapply(Mlist,function(x){rownames(x)})
-              namesForEnvs=do.call(expand.grid, rev(namesForEnvs))
-              if(ncol(namesForEnvs)==1){ # if there's no interactions
-                envs <- rep("(Intercept)",nrow(M))
-              }else{ # if there's interactions
-                nLevsInEnvs <- apply(namesForEnvs,2, function(x){length(unique(x))})
-                # remove the one with the biggest number of levels
-                namesForEnvs <- namesForEnvs[,-c(which(nLevsInEnvs == max(nLevsInEnvs))),drop=FALSE]
-                envs <- apply(namesForEnvs,1,function(x){paste(x,collapse = ":")})
-              }
-              xxList=NULL;Mlist=NULL
-              groupingTermProv[[irandom]] <- c( (ncol(prov)+1) : ( ncol(prov)+ncol(ff) ) ) # build grouping term
-              prov <- cbind(prov, as.matrix(ff)) # bind matrix to dataset
-              Mprov[[irandom]] <- M # save M matrix that combines previous effects
-              envsProv[[irandom]] <- envs # save levels for environment
-              # compute entry type column for later
-              entryTypeProv[[irandom]] <- paste(expCovariatesProv2,collapse = ":") # save info for kernels used in the different effects
+              entryTypeProv[[irandom]] <- paste(expCovariatesProv2,collapse = ":")
             }
+            
+            names(envsProv) <- names(entryTypeProv) <- names(randomTermTrait[[iTrait]]) <- vapply(randomTermProv, function(x) paste(x, collapse = "_"), character(1))
+            entryTypesTrait[[iTrait]] <- entryTypeProv
+          }else{## We need to pass the full incidence matrices to LMMsolver
+          ##################################################################
+            if(!is.null(randomTermProv)){
+              # reduce datasets
+              for(irandom in 1:length(randomTermProv)){ # for each element in the list # irandom=1
+                randomTermProv2 <- randomTermProv[[irandom]]
+                for(irandom2 in  1:length(randomTermProv2)){ # for each factor in the interactions # irandom2 = 1
+                  # print(expCovariatesProv[[irandom]][irandom2])
+                  if( expCovariatesProv[[irandom]][irandom2] == "weather"){
+                    M <- Wchol
+                  }else if(expCovariatesProv[[irandom]][irandom2] %in% c("geno","genoA","genoAD") ){
+                    M <- Gchol
+                  }else if(expCovariatesProv[[irandom]][irandom2] == "genoD"){
+                    M <- Dchol
+                  }else if(expCovariatesProv[[irandom]][irandom2] == "pedigree"){
+                    M <- Nchol
+                  }else if(expCovariatesProv[[irandom]][irandom2] %in% traitsForExpCovariates){ # Trait kernel
+                    classify <- randomTermForCovars[which(covars == expCovariatesProv[[irandom]][irandom2])]
+                    M <- TraitKernels[[expCovariatesProv[[irandom]][irandom2]]][[classify]] # Schol equivalent
+                  }else{ # No kernel
+                    namesZ <- unique(prov[,randomTermProv2[irandom2]])
+                    M <- Matrix::Diagonal(n=length(namesZ)); rownames(M) <- colnames(M) <- namesZ
+                  }
+                  goodLevels <- intersect(unique(prov[,randomTermProv2[irandom2]]), rownames(M) )
+                  if(length(goodLevels) > 0){ # only if we make a match we reduce the dataset
+                    prov <- prov[which(prov[,randomTermProv2[irandom2]] %in% goodLevels),]
+                  }else{expCovariatesProv[[irandom]][irandom2]="none"}# else we don't and change to "none" the kernel for that effect
+                }
+              }
+            }
+            ## build and add the incidence matrices
+            groupingTermProv <- Mprov <- envsProv <- entryTypeProv <- list()
+            if(!is.null(randomTermProv)){
+              for(irandom in 1:length(randomTermProv)){ # for each element in the list # irandom=1
+                randomTermProv2 <- randomTermProv[[irandom]]
+                expCovariatesProv2 <- expCovariatesProv[[irandom]]
+                # nExp <- numeric() # to save the number of effects
+                xxList <- Mlist <- list()
+                # DEBUG: sizes and names
+                for(irandom2 in  1:length(randomTermProv2)){ # for each factor in the interactions # irandom2 = 2
+                  # get kernel
+                  if( expCovariatesProv[[irandom]][irandom2] == "weather"){
+                    M <- Wchol # Weather
+                  }else if(expCovariatesProv[[irandom]][irandom2] %in% c("geno","genoA","genoAD") ){
+                    M = Gchol # Markers
+                  }else if(expCovariatesProv[[irandom]][irandom2] == "genoD"){
+                    M <- Dchol
+                  }else if(expCovariatesProv[[irandom]][irandom2] == "pedigree"){
+                    M <- Nchol # Pedigree
+                  }else if(expCovariatesProv[[irandom]][irandom2] %in% traitsForExpCovariates){ # Trait kernel
+                    classify <- randomTermForCovars[which(covars == expCovariatesProv[[irandom]][irandom2])]
+                    M <- TraitKernels[[expCovariatesProv[[irandom]][irandom2]]][[classify]] # Schol equivalent
+                  }else{ # No kernel
+                    if( unlist(lapply(prov, class))[randomTermProv2[irandom2]] %in% c("factor","character") ){
+                      namesZ <- unique(prov[,randomTermProv2[irandom2]])
+                      M <- Matrix::Diagonal(n=length(namesZ)); rownames(M) <- colnames(M) <- namesZ
+                    } else{ # numeric or integer
+                      M <- Matrix::Diagonal(n=1); rownames(M) <- colnames(M) <- randomTermProv2[irandom2]
+                    }
+                  }
+                  
+                  # build incidence matrix
+                  if( unlist(lapply(prov, class))[randomTermProv2[irandom2]] %in% c("factor","character") ){
+                    goodLevels <- intersect(unique(prov[,randomTermProv2[irandom2]]), rownames(M) )
+                    if(length(goodLevels) == 0){ # if no match then use the regular model matrix
+                      namesZ <- unique(prov[,randomTermProv2[irandom2]])
+                      M <- Matrix::Diagonal(n=length(namesZ)); rownames(M) <- colnames(M) <- namesZ
+                    }
+                    term_name <- randomTermProv2[irandom2]
+                    
+                    # 1) Make the grouping a clean factor with only the levels that are present
+                    xf <- droplevels(factor(as.character(prov[[term_name]])))
+                    
+                    # 2) Align the kernel rows to those (dropped) levels
+                    M  <- M[levels(xf), , drop = FALSE]
+                    
+                    # 3) Call redmm
+                    xx <- lme4breeding::redmm(x = xf, M = M, nPC = 0)
+                  }else{
+                    if(sommerVersion < 44){
+                      xx <- sommer::isc(prov[,randomTermProv2[irandom2]])$Z
+                    }else{
+                      xx <- sommer::ism(prov[,randomTermProv2[irandom2]])$Z
+                    }
+                  }
+                  
+                  xxList[[irandom2]] = xx # model matrix for ith effect saved
+                  Mlist[[irandom2]] = M # single factor kernel M saved
+                  
+                }
+                
+                
+                make_design <- function(xx) {
+                  if (ncol(xx) > 1) {
+                    if (sommerVersion < 44) sommer::dsc(xx) else sommer::dsm(xx)
+                  } else {
+                    if (sommerVersion < 44) sommer::isc(xx[,1]) else sommer::ism(xx[,1])
+                  }
+                }
+                
+                if (length(xxList) >= 2) {
+                  
+                  n_rows <- nrow(xxList[[1]])
+                  ncols_each <- vapply(xxList, ncol, integer(1))
+                  proj_total  <- prod(ncols_each)
+                  .check_cross_guard(n_rows, proj_total, "initial block")
+                  
+                  m_prev <- make_design(xxList[[1]])
+                  for (k in 2:length(xxList)) {
+                    m_cur <- make_design(xxList[[k]])
+                    m_prev <- if (sommerVersion < 44) sommer::vsc(m_prev, m_cur) else sommer::vsm(m_prev, m_cur)
+                    if(k < length(xxList)){
+                      if (!is.list(m_prev$Z) || any(vapply(m_prev$Z, is.null, TRUE))) {
+                        stop("m_prev$Z malformed (NULL or not a list) before cbind", call. = FALSE)
+                      }
+                      rows <- vapply(m_prev$Z, function(Z) nrow(Z), integer(1))
+                      if (length(unique(rows)) != 1L) {
+                        stop("Incompatible row counts in crossed design components before cbind", call. = FALSE)
+                      }
+                      m_prev <- tryCatch({
+                        make_design(as.matrix(do.call("cbind", m_prev$Z)))
+                      }, error = function(e) {
+                        stop(sprintf(
+                          paste0("Insufficient memory while materializing crossed design (after %d factors). ",
+                                 "Projected size ~%s rows x %s cols. Original error: %s"),
+                          k, format(n_rows, big.mark=","), format(proj_cols_k, big.mark=","), conditionMessage(e)
+                        ), call. = FALSE)
+                      })
+                    }
+                  }
+                  ff <- do.call("cbind", m_prev$Z)  
+                }else{
+                  ff <- xxList[[1]]
+                }
+                
+                Mlist_used <- vector("list", length(xxList))
+                for (jj in seq_along(xxList)) {
+                  xxj  <- xxList[[jj]]
+                  Mj   <- Mlist[[jj]]
+                  pick <- match(colnames(xxj), colnames(Mj))
+                  if (anyNA(pick)) {
+                    bad <- which(is.na(pick))
+                    stop(sprintf("Column mismatch: %d/%d columns in model matrix not found in kernel for factor %s",
+                                 length(bad), ncol(xxj), randomTermProv2[jj]),
+                         call. = FALSE)
+                  }
+                  Mlist_used[[jj]] <- Mj[, pick, drop = FALSE]
+                }
+                
+                Macc <- Reduce(function(A,B) kronecker(A, B, make.dimnames = TRUE), Mlist_used)
+                
+                # safety check: columns must match ff so Macc %*% coef works
+                if (ncol(Macc) != ncol(ff)) {
+                  stop(sprintf("Internal mismatch: ncol(Macc)=%d, ncol(ff)=%d for random term %s",
+                               ncol(Macc), ncol(ff), paste(randomTermProv2, collapse=":")))
+                }
+                # compute environment column for later
+                namesForEnvs <- lapply(Mlist,function(x){rownames(x)})
+                namesForEnvs=do.call(expand.grid, rev(namesForEnvs))
+                if(ncol(namesForEnvs)==1){ # if there's no interactions
+                  envs <- rep("(Intercept)",nrow(M))
+                }else{ # if there's interactions
+                  nLevsInEnvs <- apply(namesForEnvs,2, function(x){length(unique(x))})
+                  # remove the one with the biggest number of levels
+                  namesForEnvs <- namesForEnvs[,-c(which(nLevsInEnvs == max(nLevsInEnvs))),drop=FALSE]
+                  envs <- apply(namesForEnvs,1,function(x){paste(x,collapse = ":")})
+                }
+                xxList=NULL;Mlist=NULL
+                groupingTermProv[[irandom]] <- c( (ncol(prov)+1) : ( ncol(prov)+ncol(ff) ) ) # build grouping term
+                prov <- cbind(prov, as.matrix(ff)) # bind matrix to dataset
+                Mprov[[irandom]] <- Macc # save M matrix that combines previous effects
+                envsProv[[irandom]] <- envs # save levels for environment
+                # compute entry type column for later
+                entryTypeProv[[irandom]] <- paste(expCovariatesProv2,collapse = ":") # save info for kernels used in the different effects
+              }
+            }
+            randomTermTrait[[iTrait]] <- unique(randomTermProv) # random formula for the trait
+            names(groupingTermProv) <- names(envsProv) <- names(entryTypeProv) <- names(randomTermTrait[[iTrait]]) <- names(Mprov) <- unlist(lapply(randomTermProv, function(x){paste(x,collapse = "_")}))
+            groupingTermTrait[[iTrait]] <- groupingTermProv # grouping for this trait
+            Mtrait[[iTrait]] <- Mprov # save the M matrix that combines all single M kernel matrices to later recover the BLUPs
+            entryTypesTrait[[iTrait]] <- entryTypeProv
           }
-
+          
           if ("genoD" %in% unlist(expCovariatesProv)) { #rename designation effects
             for (i in seq_along(randomTermProv)) {
               for (j in seq_along(randomTermProv[[i]])) {
@@ -517,15 +683,10 @@ metLMMsolver <- function(
               }
             }
           }
-
-          randomTermTrait[[iTrait]] <- unique(randomTermProv) # random formula for the trait
+          
           myDataTraits[[iTrait]] <- prov # dataset for this trait
-          names(groupingTermProv) <- names(envsProv) <- names(entryTypeProv) <- names(randomTermTrait[[iTrait]]) <- names(Mprov) <- unlist(lapply(randomTermProv, function(x){paste(x,collapse = "_")}))
-          groupingTermTrait[[iTrait]] <- groupingTermProv # grouping for this trait
-          Mtrait[[iTrait]] <- Mprov # save the M matrix that combines all single M kernel matrices to later recover the BLUPs
           envsTrait[[iTrait]] <- envsProv # save the values for environment column
-          entryTypesTrait[[iTrait]] <- entryTypeProv
-          # end of formula formation
+          
         }
       }
     }
@@ -539,12 +700,15 @@ metLMMsolver <- function(
   for(iTrait in names(myDataTraits)){ # # iTrait = trait[1]  iTrait="value"
     if(verbose){message(paste("Analyzing trait", iTrait))}
     mydataSub <- myDataTraits[[iTrait]] # extract dataset
-    groupingSub <- groupingTermTrait[[iTrait]] # extract grouping indices
-    Msub <- Mtrait[[iTrait]] # extract the M kernel matrices
-    envsSub <- envsTrait[[iTrait]] # extract the values for the environment column
     entryTypesSub <- entryTypesTrait[[iTrait]] # extract values for the entryType column (kernels used)
+    
+    if(!use_formula){
+      groupingSub <- groupingTermTrait[[iTrait]] # extract grouping indices
+      Msub <- Mtrait[[iTrait]] # extract the M kernel matrices
+    }
+    
+    envsSub <- envsTrait[[iTrait]] # extract the values for the environment column
     fixedTermSub <- fixedTermTrait[[iTrait]] # extract fixed formula
-    # names(fixedTermSub) <- unlist(lapply(fixedTermSub,function(x){paste(x,collapse = ":")}))
     randomTermSub <- randomTermTrait[[iTrait]] # extract random formula
     ## deregress if needed
     VarFull <- var(mydataSub[,"predictedValue"], na.rm = TRUE) # total variance
@@ -558,10 +722,29 @@ metLMMsolver <- function(
     ## get formula
     fix <- paste( unlist(lapply(fixedTermSub, function(x){paste(x, collapse = ":")})), collapse = " + ")
     fix <- paste("predictedValue ~", fix)
-    if(length(groupingSub) > 0){
-      ranran <- paste("~", paste(paste0("grp(",names(groupingSub),")"), collapse=" + "))
-    }else{ranran <- character()}
-    if(length(ranran) == 0){ranFormulation=NULL}else{ranFormulation=as.formula(ranran)}
+    
+    if(use_formula){
+      
+      if (length(randomTermSub)) {
+        ranran <- paste(vapply(randomTermSub, function(x) paste(x, collapse=":"), ""),
+                         collapse = " + ")
+        ranran <- paste0("~",ranran)
+        ranFormulation <- as.formula(ranran)
+      } else {
+        ranFormulation <- NULL
+      }
+      
+    }else{
+      
+      if(length(groupingSub) > 0){
+        ranran <- paste("~", paste(paste0("grp(",names(groupingSub),")"), collapse=" + "))
+      }else{ranran <- character()}
+      if(length(ranran) == 0){ranFormulation=NULL}else{ranFormulation=as.formula(ranran)}
+      if(is.null(randomTermSub)){groupingSub=NULL}
+      
+    }
+    
+    
     # warnin messages in weights use
     if(useWeights){
       weightsFormulation="w"
@@ -570,45 +753,103 @@ metLMMsolver <- function(
       weightsFormulation=NULL
       if(verbose){message("   Ignoring weights in the analysis. Residual variance will be estimated.")  }
     }
-    if(is.null(randomTermSub)){groupingSub=NULL}
+    
     # print(groupingSub)
     # print(ranFormulation)
 
     ## model fit
-    mix <- try(
-      LMMsolver::LMMsolve(fixed =as.formula(fix),
-                          random = ranFormulation,
-                          # residual=ranres,
-                          weights = weightsFormulation,
-                          # ginverse = myGinverse,
-                          group = groupingSub,
-                          family = eval(parse(text = traitFamily[iTrait])),
-                          data = mydataSub, maxit = maxIters),
-      silent = TRUE
-    )
+
+    if(use_formula){
+      mix <- try(
+        LMMsolver::LMMsolve(fixed =as.formula(fix),
+                            random = ranFormulation,
+                            weights = weightsFormulation,
+                            family = eval(parse(text = traitFamily[iTrait])),
+                            data = mydataSub, maxit = maxIters),
+        silent = TRUE
+      )
+    }else{
+      mix <- try(
+        LMMsolver::LMMsolve(fixed =as.formula(fix),
+                            random = ranFormulation,
+                            weights = weightsFormulation,
+                            group = groupingSub,
+                            family = eval(parse(text = traitFamily[iTrait])),
+                            data = mydataSub, maxit = maxIters),
+        silent = TRUE
+      )
+    }
+    
     # print(mix$VarDf)
 
     pp <- list()
-    if(!inherits(mix,"try-error") ){ # if random model runs well try the fixed model
+    if(!inherits(mix,"try-error") ){ 
+      
       ## save the modeling used
       currentModeling <- data.frame(module="mtaLmms", analysisId=mtaAnalysisId,trait=iTrait, environment=c(rep("across",3), names(unlist(entryTypesSub))),
                                     parameter=c("fixedFormula","randomFormula","family",rep("kernels",length(unlist(entryTypesSub)))),
                                     value=c(fix,ifelse(length(ranran)>0,ranran,NA),traitFamily[iTrait],unlist(entryTypesSub) ))
+      
       phenoDTfile$modeling <- rbind(phenoDTfile$modeling,currentModeling[,colnames(phenoDTfile$modeling)] )
+      
+      
       ## save the environments used goodFields
       currentModeling <- data.frame(module="mtaLmms", analysisId=mtaAnalysisId,trait=iTrait, environment=allEnvironments,
                                     parameter="includedInMta",
                                     value=ifelse(allEnvironments%in%unique(mydataSub$environment), TRUE, FALSE))
       phenoDTfile$modeling <- rbind(phenoDTfile$modeling,currentModeling[,colnames(phenoDTfile$modeling)] )
-      # get variance components
+      
+      
+      
       ss <- mix$VarDf;  rownames(ss) <- ss$VarComp
       Ve <- ss["residual","Variance"]
       mu <- mix$coefMME[mix$ndxCoefficients$`(Intercept)`]
-      Ci <- solve(mix$C)
-      if(length(mu) > 0){
-        pp[["(Intercept)"]] <- data.frame(designation="(Intercept)", predictedValue=mu, stdError=sqrt(Ci[1,1]), reliability=NA,
-                                          trait=iTrait, effectType="(Intercept)", entryType="(Intercept)", environment="(Intercept)" )
+      #Get coefficient matrix
+      C_sp  <- mix$C 
+      
+      #helper function for inverse trick
+      rhs_eye_spam <- function(n, cols) {
+        if (length(cols) == 0L)
+          return(spam::spam(0, nrow = n, ncol = 0))
+        # i = row indices, j = col indices (1..k), entries = 1
+        spam::spam(list(i = cols, j = seq_along(cols), entries = rep(1, length(cols))),
+                   nrow = n, ncol = length(cols))
       }
+      
+      if (length(mu) > 0) {
+        # 1) find intercept coefficient position in the mixed-model equations
+        idx0 <- as.integer(mix$ndxCoefficients$`(Intercept)`)
+        if (length(idx0) == 1L && !is.na(idx0) && idx0 > 0) {
+          C_sp <- mix$C 
+          nC   <- nrow(C_sp)
+          E    <- rhs_eye_spam(nC, idx0)   
+          
+          #solve C %*% X = E  => X = C^{-1} E
+          X    <- spam::solve(C_sp, E)
+          
+          var_mu <- if (is.null(dim(X))) {
+            # vector
+            as.numeric(X[idx0])
+          } else {
+            # 2D (base or spam)
+            as.numeric(X[idx0, 1])
+          }
+          
+          se_mu <- sqrt(max(var_mu, 0))
+          }
+        
+        pp[["(Intercept)"]] <- data.frame(
+          designation   = "(Intercept)",
+          predictedValue= mu,
+          stdError      = se_mu,
+          reliability   = NA,
+          trait         = iTrait,
+          effectType    = "(Intercept)",
+          entryType     = "(Intercept)",
+          environment   = "(Intercept)"
+        )
+      }
+      
       fixedEffects <- setdiff(mix$EDdf$Term, mix$VarDf$VarComp)
       fixedEffects <- setdiff(fixedEffects, "(Intercept)")
 
@@ -621,9 +862,24 @@ metLMMsolver <- function(
         # if(length(shouldBeOne) > 0){pick[shouldBeOne] = 1}
         blue <- mix$coefMME[pick] + mu; names(blue) <- names(pick); #blue[1] <- blue[1]-mu
         start <- sum(mix$EDdf[1:(which(mix$EDdf$Term == iGroupFixed) - 1),"Model"]) # we don't add a one because we need the intercept
-        nEffects <- mix$EDdf[which(mix$EDdf$Term == iGroupFixed),"Effective"]#length(blue)
-        pev <- Ci[start:(start+nEffects-1),start:(start+nEffects-1)]
-        if(is.matrix(pev)){ stdError <- (sqrt(Matrix::diag(pev)))}else{stdError <- pev}
+        nEffects <- length(pick)
+        # indices of this fixed term within C
+        idx   <-  start:(start + nEffects - 1L) 
+        nC    <- nrow(mix$C)
+        
+        chunk <- 400L
+        dvals <- numeric(length(idx))
+        pos   <- 1L
+        while (pos <= length(idx)) {
+          cols <- idx[pos:min(pos + chunk - 1L, length(idx))]
+          E    <- rhs_eye_spam(nC, cols)                      # nC x k (very skinny)
+          X    <- spam::solve(C_sp, E)                        # solves C %*% X = E
+          # each needed diagonal element is X[cols[j], j]
+          k    <- length(cols)
+          dvals[pos:(pos + k - 1L)] <- X[cbind(cols, seq_len(k))]
+          pos  <- pos + k
+        }
+        stdError    <- sqrt(pmax(dvals, 0))
 
         prov <- data.frame(designation=names(blue), predictedValue=blue, stdError=stdError, reliability=NA,
                            trait=iTrait, effectType=iGroupFixed, environment="(Intercept)" )
@@ -646,52 +902,175 @@ metLMMsolver <- function(
         # save
         pp[[iGroupFixed]] <- prov
       };
+      
       if(!is.null(randomTermSub)){
-        for( iGroup in names(groupingSub)){ # iGroup=names(groupingSub)[2]
-          pick <- mix$ndxCoefficients[[iGroup]]
+        if(use_formula){
+          rnd_labels <- vapply(randomTermSub, function(x) paste(x, collapse="_"), "")
+        }else{
+          rnd_labels <- names(groupingSub)
+        }
+        
+        for( iGroup in rnd_labels){ # iGroup=names(groupingSub)[2]
+          
+          iGroup_colon <- gsub("_", ":", iGroup, fixed = TRUE)
+          
+          if(use_formula){
+            ndx_keys <- names(mix$ndxCoefficients)
+            key <- .find_ndx_key(ndx_keys, iGroup_colon)
+            pick <- mix$ndxCoefficients[[key]]
+          }else{
+            pick <- mix$ndxCoefficients[[iGroup]]
+          }
+          
           shouldBeOne <- which(pick == 0)
           if(length(shouldBeOne) > 0){pick[shouldBeOne] = 1}
-          blup <- (Msub[[iGroup]] %*% mix$coefMME[pick]); blup <- as.vector(blup)
-          names(blup) <- rownames(Msub[[iGroup]]) # Msub will always be a matrix wither a diagonal or different than but do it across for consistency
-          start <- sum(mix$EDdf[1:(which(mix$EDdf$Term == iGroup) - 1),"Model"]) # we don't add a one because we need the intercept
-          nEffects <- ncol(Msub[[iGroup]])
-          Vg <- ss[iGroup,"Variance"]
+          
+          if(use_formula){
+            blup <- as.vector(mix$coefMME[pick])
+            names(blup) <- .levels_for_term(mydataSub, iGroup_colon)
+            nEffects <- length(pick)
+          }else{
+            blup <- (Msub[[iGroup]] %*% mix$coefMME[pick]); blup <- as.vector(blup)
+            names(blup) <- rownames(Msub[[iGroup]]) 
+            nEffects <- ncol(Msub[[iGroup]])
+          }
+          
+          if(use_formula){
+            ed_keys <- mix$EDdf$Term
+            key_ed  <- .find_ndx_key(ed_keys, iGroup_colon)
+            start <- sum(mix$EDdf[1:(which(ed_keys == key_ed) - 1), "Model"])
+            Vg    <- ss[key_ed, "Variance"]
+          }else{
+            start <- sum(mix$EDdf[1:(which(mix$EDdf$Term == iGroup) - 1),"Model"]) # we don't add a one because we need the intercept
+            Vg <- ss[iGroup,"Variance"]
+          }
+          
+          C_sp  <- mix$C 
+          
           if(calculateSE){
-            if(verbose){message(paste("   Calculating standar errors for",iTrait, iGroup,"predictions"))}
-            # Ci <- solve(mix$C)
-            Cinv <- Ci[start:(start+nEffects-1),start:(start+nEffects-1)]
-            if(is.matrix(Cinv)){ # when there is more than one effect
-              Cinv <- as(as(as( Cinv,  "dMatrix"), "generalMatrix"), "CsparseMatrix") # as(Cinv, Class = "dgCMatrix")
-              startPev <- seq(1, length(blup), 500)
-              endPev  <- c(startPev - 1, length(blup)); endPev <- endPev[-1]
-              stdError <- list()
-              for(s in 1:length(startPev)){
-                use <- (startPev[s]:endPev[s])
-                stdError[[s]] <-  sqrt(Matrix::diag( Msub[[iGroup]][use,] %*% Matrix::tcrossprod( Cinv, Msub[[iGroup]][use,]) ) )
+            if(verbose){message(paste("   Calculating standard errors for",iTrait, iGroup,"predictions"))}
+              if(use_formula){
+                # indices of this random term within C
+                idx   <-  start:(start + nEffects - 1L)             # coefficient positions for this random term
+                nC    <- nrow(mix$C)
+                
+                chunk <- 400L
+                dvals <- numeric(length(idx))
+                pos   <- 1L
+                while (pos <= length(idx)) {
+                  cols <- idx[pos:min(pos + chunk - 1L, length(idx))]
+                  E    <- rhs_eye_spam(nC, cols)                      # nC x k (very skinny)
+                  X    <- spam::solve(C_sp, E)                        # solves C %*% X = E
+                  # each needed diagonal element is X[cols[j], j]
+                  k    <- length(cols)
+                  dvals[pos:(pos + k - 1L)] <- X[cbind(cols, seq_len(k))]
+                  pos  <- pos + k
+                }
+                stdError    <- sqrt(pmax(dvals, 0))
+              
+              }else{
+                #Covariates were used (Msub)
+                stop <- start + nEffects - 1L
+                idx_block <- start:stop
+                
+                startPev <- seq(1L, length(blup), by = 500L)
+                endPev   <- c(startPev - 1L, length(blup)); endPev <- endPev[-1L]
+                stdError <- vector("list", length(startPev))
+                
+                # Precompute C^{-1} columns for this block once
+                nC  <- nrow(mix$C)
+                Ebk <- rhs_eye_spam(nC, idx_block)
+                # nC x k, k = nEffects
+                
+                Xbk <- spam::solve(C_sp, Ebk)               # nC x k  (C^{-1}[:, idx_block])
+                Cinv_block <- Xbk[idx_block, , drop = FALSE]# k x k   (C^{-1}[idx_block, idx_block])
+                
+                for (b in seq_along(startPev)) {
+                  use <- startPev[b]:endPev[b]
+                  Muse <- Msub[[iGroup]][use, , drop = FALSE]
+                  Mnum <- as.matrix(Muse)
+                  
+                  # diag( Muse %*% Cinv_block %*% t(Muse) ) = rowSums( (Muse %*% Cinv_block) * Muse )
+                  Tmat <- as.matrix(Muse %*% Cinv_block)        # r x k
+                  stdError[[b]] <- sqrt(pmax(rowSums(Tmat * Mnum), 0))
+                }
+                stdError <- unlist(stdError, use.names = FALSE)
               }
-              stdError <- unlist(stdError)
-            }else{stdError <- Cinv} # random effect was just one column
             reliability <- abs((Vg - (stdError^2)) /Vg) # reliability <- abs((Vg - Matrix::diag(pev))/Vg)
           }else{stdError <- reliability <- rep(NA,length(blup))}
+          
           badRels <- which(reliability > 1); if(length(badRels) > 0){reliability[badRels] <- 0.9999}
           badRels2 <- which(reliability < 0); if(length(badRels2) > 0){reliability[badRels2] <- 0}
-          prov <- data.frame(designation=names(blup), predictedValue=blup, stdError=stdError, reliability=reliability,
-                             trait=iTrait, effectType=iGroup , environment=envsSub[[iGroup]] )
-          # add fixed effects if present in the random term
-          feToAdd <- intersect( randomTermSub[[iGroup]], fixedEffects ) # unlist(fixedTermSub)
-          if(length(feToAdd) > 0){
-            varInppGroup <- strsplit( prov[,"designation"], ":")
-            for(iFe in feToAdd){ # iFe = feToAdd[1]
-              provFe <- pp[[iFe]]
-              rownames(provFe) <- gsub(paste0(iFe,"_"),"", provFe[,"designation"])
-              pickVarInppGroup <- which(randomTermSub[[iGroup]] == feToAdd)
-              feUsed <- unlist(lapply(varInppGroup, function(x){x[pickVarInppGroup]}))
-              mu0 <- provFe[feUsed,"predictedValue"]; mu0[which(is.na(mu0))]=mu
-              prov[,"predictedValue"] <-  prov[,"predictedValue"] + mu0
+          
+          envCol <- envsSub[[iGroup]]
+          if (length(envCol) == 1L) envCol <- rep(envCol, length(blup))
+          envCol <- unname(envCol)  # drop any names attribute on the short vector
+          
+          if (use_formula && grepl("_", iGroup)) {
+            parts     <- strsplit(names(blup), ":", fixed = TRUE)
+            term_vars <- unlist(randomTermSub[[iGroup]])
+            
+            # which slots are designation
+            geno_vars <- c("designation", "designationA", "designationD",
+                           "gid", "mother", "father")
+            idx_env <- which(!(term_vars %in% geno_vars))
+            
+            if (length(idx_env) > 0L) {
+              envCol <- vapply(parts, function(p) {
+                if (length(p) < max(idx_env)) {
+                  NA_character_
+                } else {
+                  paste(p[idx_env], collapse = ":")
+                }
+              }, character(1L))
+            } else {
+              envLevels <- envsSub[[iGroup]]
+              envCol <- vapply(parts, function(p) {
+                hit <- p[p %in% envLevels]
+                if (length(hit) == 1L)      hit
+                else if (length(hit) == 0L) NA_character_
+                else                        hit[1L]
+              }, character(1L))
             }
-          }else{
-            prov[,"predictedValue"] <-  prov[,"predictedValue"] + mu
           }
+          
+          prov <- data.frame(designation=names(blup), predictedValue=blup, stdError=stdError, reliability=reliability,
+                             trait=iTrait, effectType=iGroup , environment=envCol)
+          
+          # add fixed effects if present in the random term
+          feToAdd <- intersect(unlist(randomTermSub[[iGroup]]), fixedEffects)
+          if (length(feToAdd) > 0) {
+            # split the compound label (designation column here encodes the crossed levels)
+            varInppGroup <- strsplit(prov[,"designation"], ":", fixed = TRUE)
+            
+            for (iFe in feToAdd) {
+              # which position of the crossed term corresponds to this fixed effect?
+              pickVarInppGroup <- which(unlist(randomTermSub[[iGroup]]) == iFe)
+              if (length(pickVarInppGroup) != 1L) next  # skip if ambiguous or absent
+              
+              # fixed-effect BLUEs table for this term
+              provFe <- pp[[iFe]]
+              if (is.null(provFe) || !NROW(provFe)) next
+              
+              # rownames = pure level name (strip iFe_ prefix)
+              rn <- gsub(paste0("^", iFe, "_"), "", provFe[,"designation"])
+              rownames(provFe) <- rn
+              
+              # extract the iFe level used in each crossed label of this random effect
+              feUsed <- vapply(varInppGroup,
+                               function(x) if (length(x) >= pickVarInppGroup) x[[pickVarInppGroup]] else NA_character_,
+                               FUN.VALUE = character(1))
+              
+              # map to fixed BLUE; fallback to mu when not found
+              mu0 <- provFe[feUsed, "predictedValue"]
+              mu0[is.na(mu0)] <- mu
+              
+              prov[,"predictedValue"] <- prov[,"predictedValue"] + mu0
+            }
+          } else {
+            prov[,"predictedValue"] <- prov[,"predictedValue"] + mu
+          }
+          
           # end of adding fixed effects
           sdP <- sd(prov[,"predictedValue"],na.rm=TRUE)
           cv <- (sd(prov[,"predictedValue"],na.rm=TRUE)/mean(prov[,"predictedValue"],na.rm=TRUE))*100
@@ -709,6 +1088,7 @@ metLMMsolver <- function(
           prov$entryType <- cgiarBase::replaceValues(prov$entryType, Search = "", Replace = "unknown")
           # save
           pp[[iGroup]] <- prov
+          
           phenoDTfile$metrics <- rbind(phenoDTfile$metrics,
                                        data.frame(module="mtaLmms",analysisId=mtaAnalysisId, trait= iTrait,
                                                   environment=paste(unique(envsSub[[iGroup]]), collapse = "_"),
@@ -718,9 +1098,11 @@ metLMMsolver <- function(
                                                   stdError=c(NA,NA,sd(reliability, na.rm = TRUE)/sqrt(length(reliability)),NA )
                                        )
           )
+          
         }
       }
     }else{ # if model failed
+      
       if(verbose){ cat(paste("Mixed model failed for trait",iTrait,". Aggregating and assuming h2 = 0 \n"))}
       means <- aggregate(predictedValue ~ designation, FUN=mean, data=mydataSub)
       Ve <- var(mydataSub[,"predictedValue"], na.rm=TRUE)
@@ -750,14 +1132,18 @@ metLMMsolver <- function(
     }
 
     predictionsTrait <- do.call(rbind,pp)
+    
     #############################################################
     ## add across env estimate for DESIGNATION effect type fitted
     #############################################################
     match1 <- unlist(lapply(fixedTermSub,function(x){sum(as.numeric(x=="designation"))}))
-    names(match1) <- unlist(lapply(fixedTermSub,function(x){paste(x,collapse = "_")}))
+    names(match1) <- unlist(lapply(fixedTermSub,function(x){paste(x,collapse = ":")}))
     match2 <- unlist(lapply(randomTermSub,function(x){sum(as.numeric(x=="designation"))}))
+
     match3 <- c(match1,match2)
     useForPreds <- names(match3)[which(match3 > 0)]
+    useForPreds <- gsub(":", "_", useForPreds)
+    
     doublematch <- table(predictionsTrait$effectType, predictionsTrait$environment)
     rownames(doublematch) <- gsub(":", "_", rownames(doublematch) )
     interceptCheck <- sum(apply(data.frame(useForPreds),1,function(x){
@@ -786,6 +1172,7 @@ metLMMsolver <- function(
       provx$entryType <- cgiarBase::replaceValues(provx$entryType, Search = "", Replace = "unknown")
       predictionsTrait <- rbind(predictionsTrait, provx[,colnames(predictionsTrait)])
     }
+    
     #############################################################
     ## add across env estimate for GID effect type fitted
     #############################################################
@@ -827,7 +1214,7 @@ metLMMsolver <- function(
     )
     predictionsList[[iTrait]] <- predictionsTrait
   }
-  ## enf of model fitting
+  ## end of model fitting
   if(length(predictionsList) == 0){stop("There was no predictions to work with. Please look at your H2 boundaries. You may be discarding all envs.",call. = FALSE)}
   predictionsBind <- do.call(rbind, predictionsList)
   predictionsBind$analysisId <- mtaAnalysisId
@@ -881,8 +1268,7 @@ metLMMsolver <- function(
 
   phenoDTfile$predictions <- rbind(phenoDTfile$predictions,
                                    predictionsBind[,colnames(phenoDTfile$predictions)])
-
-
+  
 
   newStatus <- data.frame(module="mtaLmms", analysisId=mtaAnalysisId, analysisIdName=NA)
   phenoDTfile$status <- rbind( phenoDTfile$status, newStatus[,colnames(phenoDTfile$status)] )
