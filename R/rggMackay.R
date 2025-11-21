@@ -125,13 +125,44 @@ rggMackay <- function(
   get_random_interactions_with_designation <- function(random_formula_chr) {
     if (!length(random_formula_chr)) return(list())
     rf <- random_formula_chr[1]
-    grp_inside <- regmatches(rf, gregexpr("grp\\(([^)]*)\\)", rf, perl = TRUE))[[1]]
-    if (!length(grp_inside)) return(list())
-    insides <- gsub("^grp\\(|\\)$", "", grp_inside)
-    raw_terms <- unlist(strsplit(insides, "\\+")); raw_terms <- trimws(raw_terms)
-    term_lists <- lapply(raw_terms, split_interaction)
-    # keep vectors that contain 'designation' AND at least one other factor
-    Filter(function(v) any(v == "designation") && length(v) >= 2, term_lists)
+    
+    term_lists <- list()
+    
+    ## 1) Terms inside grp(...)
+    grp_matches <- gregexpr("grp\\(([^)]*)\\)", rf, perl = TRUE)
+    grp_inside  <- regmatches(rf, grp_matches)[[1]]
+    
+    if (length(grp_inside)) {
+      insides <- gsub("^grp\\(|\\)$", "", grp_inside)
+      raw_terms_grp <- unlist(strsplit(insides, "\\+"))
+      raw_terms_grp <- trimws(raw_terms_grp)
+      raw_terms_grp <- raw_terms_grp[nzchar(raw_terms_grp)]
+      term_lists_grp <- lapply(raw_terms_grp, split_interaction)
+      term_lists <- c(term_lists, term_lists_grp)
+    }
+    
+    ## 2) Terms *outside* grp(...)
+    rf_outside <- rf
+    # remove all grp(...) chunks from the formula string
+    regmatches(rf_outside, grp_matches) <- ""
+    
+    # drop leading "~" if present
+    rf_outside <- sub("^\\s*~", "", rf_outside)
+    
+    raw_terms_out <- unlist(strsplit(rf_outside, "\\+"))
+    raw_terms_out <- trimws(raw_terms_out)
+    raw_terms_out <- raw_terms_out[nzchar(raw_terms_out)]
+    
+    if (length(raw_terms_out)) {
+      term_lists_out <- lapply(raw_terms_out, split_interaction)
+      term_lists <- c(term_lists, term_lists_out)
+    }
+    
+    ## 3) Keep only interactions with designation + at least one other factor
+    Filter(
+      function(v) any(v == "designation") && length(v) >= 2,
+      term_lists
+    )
   }
   
   get_fixed_blues_table <- function(trait_name, effect_name) {
@@ -194,9 +225,21 @@ rggMackay <- function(
     fixed_main <- get_fixed_main_terms(fixed_formula_chr)
     rand_ints  <- get_random_interactions_with_designation(random_formula_chr)
     
-    has_main_desig <- grepl("grp\\([^)]*\\bdesignation\\b(?![^)]*[:_])", random_formula_chr[1],
-                            perl = TRUE)
+    rf <- random_formula_chr[1]
     
+    has_main_desig_grp <- grepl(
+      "grp\\([^)]*\\bdesignation\\b(?![^)]*[:_])",
+      rf,
+      perl = TRUE
+    )
+    
+    rf_outside <- gsub("grp\\([^)]*\\)", "", rf, perl = TRUE)
+    rf_outside <- sub("^\\s*~", "", rf_outside)
+    terms_outside <- trimws(strsplit(rf_outside, "\\+")[[1]])
+    terms_outside <- terms_outside[nzchar(terms_outside)]
+    
+    has_main_desig_outside <- any(terms_outside == "designation")
+    has_main_desig <- has_main_desig_grp || has_main_desig_outside
     
     # collect all non-designation factors that co-occur with designation in random
     co_factors <- unique(unlist(lapply(rand_ints, function(v) setdiff(v, "designation"))))
