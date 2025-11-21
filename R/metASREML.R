@@ -354,10 +354,11 @@ metASREML <- function(phenoDTfile = NULL,
             if (length(covMod[[w]]) == 1) {
               randomTermprov[[w]] = x_option(covMod[[w]], randomTerm[[w]], nFA[[w]])
             } else{
-              randomTermprov[[w]] = c(
-                x_option(covMod[[w]][1], randomTerm[[w]][1], nFA[[w]]),
-                x_option(covMod[[w]][2], randomTerm[[w]][2], nFA[[w]])
-              )
+              tmprand = list()
+                for(rt in 1:length(randomTerm[[w]])){
+                  tmprand[[rt]]=x_option(covMod[[w]][rt], randomTerm[[w]][rt], nFA[[w]])
+                }
+              randomTermprov[[w]] = unlist(tmprand)
             }
           }
           randomTermprov = unique(unlist(lapply(
@@ -425,7 +426,9 @@ metASREML <- function(phenoDTfile = NULL,
       "entryType",
       "effectType",
       "year",
-      "location"
+      "location",
+      "management",
+      "trial"
     )
     tranfactfixed <- which(unique(unlist(fixedTerm)) %in% labfactor == T)    
     if (length(tranfactfixed) != 0) {
@@ -436,7 +439,7 @@ metASREML <- function(phenoDTfile = NULL,
       mydataSub[, unique(unlist(randomTerm))[tranfactrandom]] = lapply(mydataSub[unique(unlist(randomTerm))[tranfactrandom]], as.factor)
     }
     
-    asreml::asreml.options(workspace = 30e7,pworkspace = 200e7,trace = T,ai.sing = T)
+    asreml::asreml.options(workspace = 300e7,pworkspace = 200e7,trace = T,ai.sing = T)
     
     fixed_formula <- tryCatch(as.formula(fixedTermSub), error = function(e) return(NULL))
     random_formula <- tryCatch(as.formula(randomTermSub), error = function(e) return(NULL))
@@ -594,6 +597,7 @@ metASREML <- function(phenoDTfile = NULL,
     oriGen = c()
     relstrGen = c()
     only1 = which(lapply(randomTerm, length) == 1)
+    if(length(only1)!=0){
     count = 1
     for (sb in 1:length(only1)) {
       if (randomTerm[[only1[sb]]] %in% c("designation", "mother", "father", "gid") == T) {
@@ -602,6 +606,7 @@ metASREML <- function(phenoDTfile = NULL,
         relstrGen[count] = covMod[[only1[sb]]]
         count = count + 1
       }
+    }
     }
     #Random terms interaction
     subgroupInt = c()
@@ -690,6 +695,7 @@ metASREML <- function(phenoDTfile = NULL,
     }
     
     groupingSub = c(subgroupGen, subgroupInt)
+    if (length(groupingSub)!=0){
     for (iGroup in groupingSub) {
       #for( iGroup in names(groupingSub)){ # iGroup=groupingSub[2]
       if (iGroup %in% subgroupGen) {
@@ -826,7 +832,9 @@ metASREML <- function(phenoDTfile = NULL,
         )
       )
     }
-    
+    }else{
+      statusmetrics = mix$converge
+      }
     kernels = paste(unlist(addG)[which(
       unlist(addG) %in% c(
         "Relationship structure_GenoA",

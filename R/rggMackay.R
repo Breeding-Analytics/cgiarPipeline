@@ -73,7 +73,7 @@ rggMackay <- function(
   alone<-stringr::str_detect(termsfind,":")
   termsfind<-termsfind[which(alone==F)]
   if(length(grep("designation", termsfind)) > 0){
-    deregress=TRUE
+      deregress=TRUE
   }else{ # BLUE
     deregress=FALSE
   }
@@ -309,8 +309,10 @@ rggMackay <- function(
                 mix <- lm(as.formula(fix), data=mydataSub2)
                 sm <- summary(mix)
                 p1[cc] <- sm$coefficients[2,1]*ifelse(deregress,deregressWeight,1)
-                baselineFirstYear <- mix$coefficients[1] + ( (mix$coefficients[2]*ifelse(deregress,deregressWeight,1))*min(as.numeric(mydataSub[which(mydataSub$trait == iTrait),fixedTerm]), na.rm=TRUE ))
-                baselineAverageYear <- mix$coefficients[1] + ( (mix$coefficients[2]*ifelse(deregress,deregressWeight,1))*mean(as.numeric(mydataSub[which(mydataSub$trait == iTrait),fixedTerm]) , na.rm=TRUE ))
+                #baselineFirstYear <- mix$coefficients[1] + ( (mix$coefficients[2]*ifelse(deregress,deregressWeight,1))*min(as.numeric(mydataSub[which(mydataSub$trait == iTrait),fixedTerm]), na.rm=TRUE ))
+                #baselineAverageYear <- mix$coefficients[1] + ( (mix$coefficients[2]*ifelse(deregress,deregressWeight,1))*mean(as.numeric(mydataSub[which(mydataSub$trait == iTrait),fixedTerm]) , na.rm=TRUE ))
+                baselineFirstYear <- min(as.numeric(mydataSub[which(mydataSub$trait == iTrait),fixedTerm]), na.rm=TRUE )
+                baselineAverageYear <- mean(as.numeric(mydataSub[which(mydataSub$trait == iTrait),fixedTerm]) , na.rm=TRUE)
                 p2[cc] <- round(( (mix$coefficients[2]*ifelse(deregress,deregressWeight,1)) /baselineFirstYear) * 100,3)
                 p2b[cc] <- round(( (mix$coefficients[2]*ifelse(deregress,deregressWeight,1)) /baselineAverageYear) * 100,3)
                 p3[cc] <- round((sm$coefficients[2,2]/baselineFirstYear) * 100,3)
@@ -335,6 +337,8 @@ rggMackay <- function(
           gg <- sm$coefficients[2,1]*ifelse(deregress,deregressWeight,1)
           baselineFirstYear <- mix$coefficients[1] + ( (mix$coefficients[2]*ifelse(deregress,deregressWeight,1))*min(as.numeric(mydataSub[which(mydataSub$trait == iTrait),fixedTerm]) , na.rm=TRUE ))
           baselineAverageYear <- mix$coefficients[1] + ( (mix$coefficients[2]*ifelse(deregress,deregressWeight,1))*mean(as.numeric(mydataSub[which(mydataSub$trait == iTrait),fixedTerm]) , na.rm=TRUE ))
+          #baselineFirstYear <-min(as.numeric(mydataSub[which(mydataSub$trait == iTrait),fixedTerm]) , na.rm=TRUE )
+          #baselineAverageYear <- mean(as.numeric(mydataSub[which(mydataSub$trait == iTrait),fixedTerm]) , na.rm=TRUE )
           ggPercentage <- round(( (mix$coefficients[2]*ifelse(deregress,deregressWeight,1)) /baselineFirstYear) * 100,3)
           ggPercentageAverageYear <- round(( (mix$coefficients[2]*ifelse(deregress,deregressWeight,1)) /baselineAverageYear) * 100,3)
           seGgPercentage <- round((sm$coefficients[2,2]/baselineFirstYear) * 100,3)
@@ -347,11 +351,12 @@ rggMackay <- function(
         }
         gg.y1<- sort(unique(mydataSub[,fixedTerm]), decreasing = FALSE)[1] # first year
         gg.yn <- sort(unique(mydataSub[,fixedTerm]), decreasing = TRUE)[1] # last year
-        ntrial <- phenoDTfile$predictions # number of trials
+        ntrial <- phenoDTfile$modeling # number of trials
         ntrial <- ntrial[which(ntrial$analysisId ==analysisId),]
         ntrial <- ntrial[which(ntrial$trait ==iTrait),]
-        ntrial <- ntrial[which(ntrial$effectType =="environment"),]
-        ntrial <- length(unique(ntrial$designation))
+        ntrial <- ntrial[which(ntrial$parameter == "includedInMta"),]
+        ntrial <- ntrial[which(ntrial$value == "TRUE"),]
+        ntrial <- length(unique(ntrial$environment))
         phenoDTfile$metrics <- rbind(phenoDTfile$metrics,
                                      data.frame(module="rgg",analysisId=rggAnalysisId, trait=iTrait, environment="across",
                                                 parameter=c("ggSlope","ggInter", "gg%(first.year)","gg%(average.year)","r2","pVal","nTrial","initialYear","lastYear"), method=ifelse(deregress,"blup+dereg","mackay"),
