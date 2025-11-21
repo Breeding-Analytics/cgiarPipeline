@@ -193,6 +193,22 @@ rggPiepho <- function(
     fixed_main <- get_fixed_main_terms(fixed_formula_chr)
     rand_ints  <- get_random_interactions_with_designation(random_formula_chr)
     
+    rf <- random_formula_chr[1]
+    
+    has_main_desig_grp <- grepl(
+      "grp\\([^)]*\\bdesignation\\b(?![^)]*[:_])",
+      rf,
+      perl = TRUE
+    )
+    
+    rf_outside <- gsub("grp\\([^)]*\\)", "", rf, perl = TRUE)
+    rf_outside <- sub("^\\s*~", "", rf_outside)
+    terms_outside <- trimws(strsplit(rf_outside, "\\+")[[1]])
+    terms_outside <- terms_outside[nzchar(terms_outside)]
+    
+    has_main_desig_outside <- any(terms_outside == "designation")
+    has_main_desig <- has_main_desig_grp || has_main_desig_outside
+    
     # collect all non-designation factors that co-occur with designation in random
     co_factors <- unique(unlist(lapply(rand_ints, function(v) setdiff(v, "designation"))))
     if (!length(co_factors)) co_factors <- character()
@@ -204,19 +220,20 @@ rggPiepho <- function(
     mu <- as.numeric(mu_by_trait[iTrait]); if (!is.finite(mu)) mu <- 0
     
     sum_dev <- 0
-    for (v in overlap_fixed) {
-      blues_v <- get_fixed_blues_table(iTrait, v)
-      if (!nrow(blues_v)) next
-      # deviation = (BLUE including μ) - μ => subtract μ
-      blues_v$dev <- blues_v$predictedValue - mu
-      # levels to average over
-      levs <- choose_levels_for_factor(mydataSub, v, blues_v)
-      if (!length(levs)) next
-      dev_v <- mean(blues_v$dev[match(levs, blues_v$designation)], na.rm = TRUE)
-      if (is.finite(dev_v)) sum_dev <- sum_dev + dev_v
+    
+    if (!has_main_desig && length(overlap_fixed)) {
+      for (v in overlap_fixed) {
+        blues_v <- get_fixed_blues_table(iTrait, v)
+        if (!nrow(blues_v)) next
+        # MTA writes fixed BLUEs including μ; subtract μ to get deviations
+        blues_v$dev <- blues_v$predictedValue - mu
+        levs <- choose_levels_for_factor(mydataSub, v, blues_v)
+        if (!length(levs)) next
+        dev_v <- mean(blues_v$dev[match(levs, blues_v$designation)], na.rm = TRUE)
+        if (is.finite(dev_v)) sum_dev <- sum_dev + dev_v
+      }
     }
     
-    #Deregressed BLUPS
     fixed_part <- mu + sum_dev
     centered <- mydataSub$predictedValue - fixed_part
     mydataSub$predictedValue.d <- fixed_part + centered/mydataSub$rel
