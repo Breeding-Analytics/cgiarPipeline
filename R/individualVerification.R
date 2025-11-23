@@ -42,14 +42,14 @@ individualVerification <- function(
   colnames(ped) <- cgiarBase::replaceValues(colnames(ped), Search = metaPed$value, Replace = metaPed$parameter )
   colsForExpecGeno <- cgiarBase::replaceValues(colsForExpecGeno, Search = metaPed$value, Replace = metaPed$parameter )
   
-  if("entryType" %in% colnames(ped)){
-    if(any(ped$entryType == "F1", na.rm = TRUE)){
-      ped = ped[ped$entryType == "F1",]
+  if("crossType" %in% colnames(ped)){
+    if(any(ped$crossType == "F1", na.rm = TRUE)){
+      ped = ped[ped$crossType == "F1",]
     }else{
-      stop("To run the F1 qa/qc module the entryType column in the pedigree data needs to indicate which individuals are F1s to be evaluated")
+      stop("To run the F1 qa/qc module the crossType column in the pedigree data needs to indicate which individuals are F1s to be evaluated")
     }
   }else{
-    stop("To run the F1 qa/qc module the entryType column in the pedigree data needs to indicate which individuals are F1s to be evaluated")
+    stop("To run the F1 qa/qc module the crossType column in the pedigree data needs to indicate which individuals are F1s to be evaluated")
   }
   
   
@@ -148,6 +148,7 @@ individualVerification <- function(
                                 ploidy=ploidy,
                                 sc_filter = sc_filter,
                                 het=het)
+  
   if(onlyMats){
     return(res)
   }else{
@@ -164,6 +165,7 @@ individualVerification <- function(
   }else{
     object$modeling <- rbind(object$modeling, modeling[, colnames(object$modeling)])
   }
+  
   # metrics
   nMarkers = ncol(Mexpec)
   nInds = nrow(cross)
@@ -196,6 +198,7 @@ individualVerification <- function(
                                           stdError= NA
                                )
   )
+  
   ##############
   ## predictions
   
@@ -266,13 +269,13 @@ individualVerification <- function(
   if("sample_id" %in% colnames(ped)){
     preds <- data.frame(module="gVerif",  analysisId=analysisId, pipeline= "unknown",
                         trait=pp$time, gid=1:nrow(pp), designation=pp$designation,
-                        mother=pp$Var1,father=pp$Var2, entryType="F1", effectType="sample_id",
+                        mother=pp$Var1,father=pp$Var2, entryType="unknown", effectType="sample_id",
                         environment="across", predictedValue=pp$predictedValue, stdError=NA,
                         reliability=NA)
   }else{
     preds <- data.frame(module="gVerif",  analysisId=analysisId, pipeline= "unknown",
                         trait=pp$time, gid=1:nrow(pp), designation=pp$designation,
-                        mother=pp$Var1,father=pp$Var2, entryType="F1", effectType="designation",
+                        mother=pp$Var1,father=pp$Var2, entryType="unknown", effectType="designation",
                         environment="across", predictedValue=pp$predictedValue, stdError=NA,
                         reliability=NA)
   }
