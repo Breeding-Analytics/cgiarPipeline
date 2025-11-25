@@ -564,7 +564,7 @@ metLMMsolver <- function(
                     M  <- M[levels(xf), , drop = FALSE]
                     
                     # 3) Call redmm
-                    xx <- lme4breeding::redmm(x = xf, M = M, nPC = 0)
+                    xx <- redmm(x = xf, M = M, nPC = 0)
                   }else{
                     if(sommerVersion < 44){
                       xx <- sommer::isc(prov[,randomTermProv2[irandom2]])$Z
