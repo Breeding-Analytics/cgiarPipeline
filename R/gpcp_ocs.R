@@ -78,10 +78,10 @@ gpcp <- function(
     if(is.null(M)){stop("Markers are not available for this dataset. GPCP requires markers to work", call. = FALSE)}
 
     if(length(qas) > 0){
-      if(length(which(is.na(M))) > 0){M <- apply(M,2,sommer::imputev)}
+      if(length(which(is.na(M))) > 0){M <- apply(M,2,enhancer::imputev)}
     }else{
-      missing <- apply(M,2,sommer::propMissing)
-      M <- apply(M[,which(missing < 0.9)],2,sommer::imputev)
+      missing <- apply(M,2,enhancer::propMissing)
+      M <- apply(M[,which(missing < 0.9)],2,enhancer::imputev)
     }
 
 
