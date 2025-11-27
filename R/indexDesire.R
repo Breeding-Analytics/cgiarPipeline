@@ -59,7 +59,7 @@ indexDesire <- function(
                    timevar = "trait", v.names = "predictedValue", sep= "_")
   wide <- as.matrix(wide0[,-1]); colnames(wide) <- gsub("predictedValue_","", colnames(wide0)[-1])#unique(mydata$trait)
   wide <- as.matrix(wide[,trait]); colnames(wide) <- trait # ensure order of the user so weights also match
-  wide <- apply(wide,2,sommer::imputev)
+  wide <- apply(wide,2,enhancer::imputev)
   if(scaled){
     if(verbose){cat(paste("scaled has been set to",scaled,"'desirev' values are expected to be the desired change in std. deviations \n"))}
     wide <- apply(wide,2,scale)

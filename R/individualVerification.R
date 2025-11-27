@@ -62,7 +62,7 @@ individualVerification <- function(
   cross <- cross[which(!duplicated(cross$hybrid)),]
 
   # controls
-  if( any( c(sommer::propMissing(cross$Var1), sommer::propMissing(cross$Var2)) == 1 ) ){
+  if( any( c(enhancer::propMissing(cross$Var1), enhancer::propMissing(cross$Var2)) == 1 ) ){
     stop("You have too many fathers or mothers missing in the pedigree. Please correct your file", call. = FALSE)
   }
   mothersWithM <- intersect(unique(c(cross$Var1)), rownames(Markers))

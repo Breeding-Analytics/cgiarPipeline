@@ -66,7 +66,7 @@ metASREML <- function(phenoDTfile = NULL,
   ##########################################
   ## EXTRACT POSSIBLE EXPLANATORY COVARIATES AND FORM KERNELS (30 lines)
   Weather <- cgiarPipeline::summaryWeather(phenoDTfile, wide = TRUE) # in form of covariates
-  Weather <- apply(Weather, 2, sommer::imputev)
+  Weather <- apply(Weather, 2, enhancer::imputev)
   colnames(Weather) <- gsub(" ", "", colnames(Weather))
   
   covars <- unique(unlist(addG))
@@ -92,11 +92,11 @@ metASREML <- function(phenoDTfile = NULL,
         Markers <- cgiarBase::applyGenoModifications(M = Markers, modifications =
                                                        modificationsMarkers)
         if (length(which(is.na(Markers))) > 0) {
-          Markers <- apply(Markers, 2, sommer::imputev)
+          Markers <- apply(Markers, 2, enhancer::imputev)
         }
       } else{
-        missing <- apply(Markers, 2, sommer::propMissing)
-        Markers <- apply(Markers[, which(missing < 0.9)], 2, sommer::imputev)
+        missing <- apply(Markers, 2, enhancer::propMissing)
+        Markers <- apply(Markers[, which(missing < 0.9)], 2, enhancer::imputev)
       }
     }
     ploidyFactor <- max(Markers) / 2
@@ -114,7 +114,7 @@ metASREML <- function(phenoDTfile = NULL,
                   nrow = length(missing),
                   ncol = length(missing))
       rownames(A1m) <- colnames(A1m) <- missing
-      G <- sommer::adiag1(G, A1m)
+      G <- enhancer::adiag1(G, A1m)
       G <- G + diag(1e-5, ncol(G), ncol(G))
     } # additive model
     if ("Relationship structure_GenoD" %in% covars) {
@@ -132,7 +132,7 @@ metASREML <- function(phenoDTfile = NULL,
                     nrow = length(missing),
                     ncol = length(missing))
         rownames(A1m) <- colnames(A1m) <- missing
-        D <- sommer::adiag1(D, A1m)
+        D <- enhancer::adiag1(D, A1m)
         Gd <- D + diag(1e-5, ncol(D), ncol(D))
       } else{
         #autopolyploid formula for digenic dominance (Batista et al. 2022)

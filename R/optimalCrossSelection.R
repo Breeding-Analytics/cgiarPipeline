@@ -79,10 +79,10 @@ ocs <- function(
     if(is.null(M)){stop("Markers are not available for this dataset. OCS requires pedigree or markers to work. Please upload any of these in the data retrieval tabs.", call. = FALSE)}
 
     if(length(qas) > 0){
-      if(length(which(is.na(M))) > 0){M <- apply(M,2,sommer::imputev)}
+      if(length(which(is.na(M))) > 0){M <- apply(M,2,enhancer::imputev)}
     }else{
-      missing <- apply(M,2,sommer::propMissing)
-      M <- apply(M[,which(missing < 0.9)],2,sommer::imputev)
+      missing <- apply(M,2,enhancer::propMissing)
+      M <- apply(M[,which(missing < 0.9)],2,enhancer::imputev)
     }
 
     if(ncol(M) > 5000){ # we remove that many markers if a big snp chip
