@@ -276,7 +276,7 @@ metLMMsolver <- function(
         if("genoD" %in% covars){ #Dominance kernel
           if(ploidyFactor == 1){
 
-            D <- 1-abs(Markers)
+            D <- 1-abs(Markers-ploidyFactor)
 
             f <- rowSums(D) / ncol(D) #inbreeding fixed eff
             names(f) <- rownames(Markers)
