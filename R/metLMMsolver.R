@@ -1,7 +1,8 @@
 metLMMsolver <- function(
     phenoDTfile= NULL, analysisId=NULL, analysisIdGeno = NULL,
     fixedTerm= list("1"),  randomTerm=NULL, expCovariates=NULL,
-    envsToInclude=NULL, trait= NULL, traitFamily=NULL, useWeights=TRUE,
+    envsToInclude=NULL, trait= NULL, traitFamily=NULL,
+    useWeights=TRUE,estHybrids = TRUE,
     calculateSE=TRUE, heritLB= 0.15,  heritUB= 0.95,
     meanLB=0, meanUB=Inf, nPC=NULL,   # subsetVariable=NULL, subsetVariableLevels=NULL,
     maxIters=50,  verbose=TRUE
@@ -81,6 +82,22 @@ metLMMsolver <- function(
     ok
   }
   
+  #Flags for SCA and GCA models
+  is_SCA_GCA = FALSE
+  is_GCA = FALSE
+  
+  find_sca_gca = intersect(unlist(randomTerm),c("mother","father","designation"))
+  if (setequal(find_sca_gca, c("mother","father","designation"))){
+    is_SCA_GCA = TRUE
+  }else if(setequal(find_sca_gca, c("mother","father"))){
+    is_GCA = TRUE
+  }else if(setequal(find_sca_gca, c("mother"))){
+    is_GCA = TRUE
+  }else if(setequal(find_sca_gca, c("father"))){
+    is_GCA = TRUE
+  }
+  
+  
   ##########################################
   ##########################################
   ## CONTROLS FOR MISSPECIFICATION (6 lines)
@@ -128,8 +145,10 @@ metLMMsolver <- function(
       if(verbose){message("Checking and calculating kernels requested")}
       ## MARKER KERNEL
       Markers <- NULL
-      if(!is.null(phenoDTfile$data$geno))
+      if(!is.null(phenoDTfile$data$geno)){
         Markers <- as.matrix(phenoDTfile$data$geno) # in form of covariates
+      }
+       
       if(any(c("genoA","genoAD") %in% covars) & !is.null(Markers)){
         classify <- unique(unlist(randomTerm)[which(unlist(expCovariates) %in% c("genoA","genoAD","genoD") )])
         # eventually we may have to do a for loop
@@ -166,10 +185,93 @@ metLMMsolver <- function(
         # }
         if(nPC["geno"] < 0){ # do not include extra individuals
           mydataX <-  phenoDTfile$predictions[which( phenoDTfile$predictions$analysisId %in% analysisId),]
-          Markers <- Markers[which(rownames(Markers) %in% unique(mydataX$designation) ), ]
+          if(!is_SCA_GCA & !is_GCA){
+            Markers <- Markers[which(rownames(Markers) %in% unique(mydataX$designation) ), ]
+          }
           if(verbose){message(paste("Subsetting marker to",nrow(Markers),"individuals present"))}
         }
+        
         ploidyFactor <- max(Markers)/2
+        
+        if (is_SCA_GCA) {
+          #This is the SCA/GCA model
+          if(any(unlist(expCovariates) %in% c("genoA","genoD"))){
+            #Only records with parental information will be kept
+            myData = phenoDTfile$predictions
+            myData <- myData[which(myData$analysisId %in% analysisId),]
+            myData = myData[!is.na(myData$mother),]
+            myData = myData[!is.na(myData$father),]
+            
+            has_genoMother = myData$mother %in% rownames(Markers)
+            has_genoFather = myData$father %in% rownames(Markers)
+            
+            to_model = myData[has_genoMother & has_genoFather,]
+            if(nrow(to_model)==0){
+              stop("Parental genotypes are required to run this model")
+            }
+            hybrids_for_sca = unique(to_model$designation)
+            mothers_for_sca = unique(to_model$mother)
+            fathers_for_sca = unique(to_model$father)
+            
+            if(ploidyFactor == 1 & estHybrids){ #we can estimate hybrid diploid genotypes from parental lines
+              desig_noGeno = myData[!myData$designation %in% rownames(Markers),]
+              
+              if(nrow(desig_noGeno)>0){
+                has_genoMother = desig_noGeno$mother %in% rownames(Markers)
+                has_genoFather = desig_noGeno$father %in% rownames(Markers)
+                
+                desig_noGeno = desig_noGeno[has_genoMother & has_genoFather,]
+                desig_noGeno = unique(desig_noGeno[,c("designation","mother","father")])
+                if(nrow(desig_noGeno)>0){
+                  n_hybrids = nrow(desig_noGeno)
+                  message("Parental genotypes found for: ",n_hybrids," hybrids \n")
+                  
+                  M_mother = Markers[desig_noGeno$mother,]
+                  M_father = Markers[desig_noGeno$father,]
+                  M_hybrid = (M_mother + M_father)/2 
+                  rownames(M_hybrid) = desig_noGeno$designation
+                  
+                  Markers = rbind(Markers,M_hybrid)
+                  
+                }else{
+                  message("No parental genotypes found for missing hybrids.")
+                }
+              }
+            }
+          }
+        }else if(is_GCA){
+          
+          if(any(unlist(expCovariates) == "genoA")){
+          #Only records with parental information will be kept
+          myData = phenoDTfile$predictions
+          myData = myData[!is.na(myData$mother),]
+          myData = myData[!is.na(myData$father),]
+          
+          has_genoMother = myData$mother %in% rownames(Markers)
+          has_genoFather = myData$father %in% rownames(Markers)
+          
+          to_model = myData[has_genoMother & has_genoFather,]
+          mothers_for_gca = unique(to_model$mother)
+          fathers_for_gca = unique(to_model$father)
+          }
+        }else if(setequal(find_sca_gca, c("mother"))){
+          myData = phenoDTfile$predictions
+          myData = myData[!is.na(myData$mother),]
+          
+          has_genoMother = myData$mother %in% rownames(Markers)
+          to_model = myData[has_genoMother,]
+          mothers_for_gca = unique(to_model$mother)
+          
+        }else if(setequal(find_sca_gca, c("father"))){
+          myData = phenoDTfile$predictions
+          myData = myData[!is.na(myData$father),]
+          
+          has_genoFather = myData$father %in% rownames(Markers)
+          to_model = myData[has_genoFather,]
+          fathers_for_gca = unique(to_model$father)
+        }  
+        
+        
         if("genoA" %in% covars){G <- sommer::A.mat(Markers-ploidyFactor);} # additive model
         if("genoD" %in% covars){ #Dominance kernel
           if(ploidyFactor == 1){
@@ -331,6 +433,7 @@ metLMMsolver <- function(
   if(verbose){message("Loading the dataset and adding metadata.")}
   mydata <- phenoDTfile$predictions #
   mydata <- mydata[which(mydata$analysisId %in% analysisId),]
+  
   if (nrow(mydata) < 2) stop("Not enough data is available to perform a multi trial analysis. Please perform an STA before trying to do an MET.", call. = FALSE)
   metaPheno <- phenoDTfile$metadata$pheno[which(phenoDTfile$metadata$pheno$parameter %in% c("pipeline","stage","environment","year","season","timepoint","country","location","trial","study","management")),]
   otherMetaCols <- unique(phenoDTfile$data$pheno[,metaPheno$value,drop=FALSE])
@@ -498,9 +601,31 @@ metLMMsolver <- function(
                   if( expCovariatesProv[[irandom]][irandom2] == "weather"){
                     M <- Wchol
                   }else if(expCovariatesProv[[irandom]][irandom2] %in% c("geno","genoA","genoAD") ){
-                    M <- Gchol
+                    if(is_SCA_GCA){
+                      if(randomTermProv[[irandom]][irandom2]=="mother"){
+                        M <- Gchol[mothers_for_sca,]
+                      }else if(randomTermProv[[irandom]][irandom2]=="father"){
+                        M <- Gchol[fathers_for_sca,]
+                      }
+                    }else if(is_GCA){
+                      if(randomTermProv[[irandom]][irandom2]=="mother"){
+                        M <- Gchol[mothers_for_gca,]
+                      }else if(randomTermProv[[irandom]][irandom2]=="father"){
+                        M <- Gchol[fathers_for_gca,]
+                      }
+                    }else{
+                      M <- Gchol
+                    }
                   }else if(expCovariatesProv[[irandom]][irandom2] == "genoD"){
-                    M <- Dchol
+                    if(is_SCA_GCA){
+                      if(randomTermProv[[irandom]][irandom2]=="designation"){
+                        M <- Dchol[hybrids_for_sca,]
+                      }else{
+                        stop("SCA requires genoD to be fitted for designation")
+                      }
+                    }else{
+                      M <- Dchol
+                    }
                   }else if(expCovariatesProv[[irandom]][irandom2] == "pedigree"){
                     M <- Nchol
                   }else if(expCovariatesProv[[irandom]][irandom2] %in% traitsForExpCovariates){ # Trait kernel
@@ -531,9 +656,29 @@ metLMMsolver <- function(
                   if( expCovariatesProv[[irandom]][irandom2] == "weather"){
                     M <- Wchol # Weather
                   }else if(expCovariatesProv[[irandom]][irandom2] %in% c("geno","genoA","genoAD") ){
-                    M = Gchol # Markers
+                    if(is_SCA_GCA){
+                      if(randomTermProv[[irandom]][irandom2]=="mother"){
+                        M <- Gchol[mothers_for_sca,]
+                      }else if(randomTermProv[[irandom]][irandom2]=="father"){
+                        M <- Gchol[fathers_for_sca,]
+                      }
+                    }else if(is_GCA){
+                      if(randomTermProv[[irandom]][irandom2]=="mother"){
+                        M <- Gchol[mothers_for_gca,]
+                      }else if(randomTermProv[[irandom]][irandom2]=="father"){
+                        M <- Gchol[fathers_for_gca,]
+                      }
+                    }else{
+                      M <- Gchol
+                    }
                   }else if(expCovariatesProv[[irandom]][irandom2] == "genoD"){
-                    M <- Dchol
+                    if(is_SCA_GCA){
+                      if(randomTermProv[[irandom]][irandom2]=="designation"){
+                        M <- Dchol[hybrids_for_sca,]
+                      }
+                    }else{
+                      M <- Dchol
+                    }
                   }else if(expCovariatesProv[[irandom]][irandom2] == "pedigree"){
                     M <- Nchol # Pedigree
                   }else if(expCovariatesProv[[irandom]][irandom2] %in% traitsForExpCovariates){ # Trait kernel
@@ -564,7 +709,7 @@ metLMMsolver <- function(
                     M  <- M[levels(xf), , drop = FALSE]
                     
                     # 3) Call redmm
-                    xx <- lme4breeding::redmm(x = xf, M = M, nPC = 0)
+                    xx <- enhancer::redmm(x = xf, M = M, nPC = 0)
                   }else{
                     if(sommerVersion < 44){
                       xx <- sommer::isc(prov[,randomTermProv2[irandom2]])$Z
@@ -663,25 +808,26 @@ metLMMsolver <- function(
                 entryTypeProv[[irandom]] <- paste(expCovariatesProv2,collapse = ":") # save info for kernels used in the different effects
               }
             }
+            
+            if (("genoD" %in% unlist(expCovariatesProv))&(!is_SCA_GCA)) { #rename designation effects
+              for (i in seq_along(randomTermProv)) {
+                for (j in seq_along(randomTermProv[[i]])) {
+                  if (randomTermProv[[i]][j] == "designation") {
+                    if (expCovariatesProv[[i]][j] == "genoA") {
+                      randomTermProv[[i]][j] <- "designationA"
+                    } else if (expCovariatesProv[[i]][j] == "genoD") {
+                      randomTermProv[[i]][j] <- "designationD"
+                    }
+                  }
+                }
+              }
+            }
+            
             randomTermTrait[[iTrait]] <- unique(randomTermProv) # random formula for the trait
             names(groupingTermProv) <- names(envsProv) <- names(entryTypeProv) <- names(randomTermTrait[[iTrait]]) <- names(Mprov) <- unlist(lapply(randomTermProv, function(x){paste(x,collapse = "_")}))
             groupingTermTrait[[iTrait]] <- groupingTermProv # grouping for this trait
             Mtrait[[iTrait]] <- Mprov # save the M matrix that combines all single M kernel matrices to later recover the BLUPs
             entryTypesTrait[[iTrait]] <- entryTypeProv
-          }
-          
-          if ("genoD" %in% unlist(expCovariatesProv)) { #rename designation effects
-            for (i in seq_along(randomTermProv)) {
-              for (j in seq_along(randomTermProv[[i]])) {
-                if (randomTermProv[[i]][j] == "designation") {
-                  if (expCovariatesProv[[i]][j] == "genoA") {
-                    randomTermProv[[i]][j] <- "designationA"
-                  } else if (expCovariatesProv[[i]][j] == "genoD") {
-                    randomTermProv[[i]][j] <- "designationD"
-                  }
-                }
-              }
-            }
           }
           
           myDataTraits[[iTrait]] <- prov # dataset for this trait
@@ -1074,6 +1220,21 @@ metLMMsolver <- function(
           # end of adding fixed effects
           sdP <- sd(prov[,"predictedValue"],na.rm=TRUE)
           cv <- (sd(prov[,"predictedValue"],na.rm=TRUE)/mean(prov[,"predictedValue"],na.rm=TRUE))*100
+          
+          ## PEV-corrected variance of this random effect (Fernández-González & Isidro y Sánchez, 2025, Eq. 4)
+          var_PEV <- NA_real_
+          
+          if (isTRUE(calculateSE) && length(blup) > 0L) {
+            ok <- which(!is.na(blup) & !is.na(stdError))
+            if (length(ok) > 0L) {
+              n_eff     <- length(ok)
+              var_hat   <- sum(blup[ok]^2) / n_eff
+              mean_pev  <- sum(stdError[ok]^2) / n_eff   # tr(PEV)/n using only diagonal
+              var_PEV   <- var_hat + mean_pev            # σ^2 = var(â) + tr(PEV)/n
+            }
+          }
+          
+          
           # add additional entry type labels
           colsToUse <- unlist(randomTermSub[[iGroup]])
           colsToUse[colsToUse %in% c("designationA", "designationD")] <- "designation"
@@ -1092,10 +1253,10 @@ metLMMsolver <- function(
           phenoDTfile$metrics <- rbind(phenoDTfile$metrics,
                                        data.frame(module="mtaLmms",analysisId=mtaAnalysisId, trait= iTrait,
                                                   environment=paste(unique(envsSub[[iGroup]]), collapse = "_"),
-                                                  parameter=c( paste(c("mean","sd", "r2","Var"),iGroup,sep="_") ),
-                                                  method=c("sum(x)/n","sd","(G-PEV)/G","REML"),
-                                                  value=c(mean(prov[,"predictedValue"], na.rm=TRUE), sdP, median(reliability), var(prov[,"predictedValue"], na.rm=TRUE) ),
-                                                  stdError=c(NA,NA,sd(reliability, na.rm = TRUE)/sqrt(length(reliability)),NA )
+                                                  parameter=c( paste(c("mean","sd", "r2","Var","Var_PEVcorr"),iGroup,sep="_") ),
+                                                  method=c("sum(x)/n","sd","(G-PEV)/G","REML","REML"),
+                                                  value=c(mean(prov[,"predictedValue"], na.rm=TRUE), sdP, median(reliability), var(prov[,"predictedValue"], na.rm=TRUE), var_PEV),
+                                                  stdError=c(NA,NA,sd(reliability, na.rm = TRUE)/sqrt(length(reliability)),NA,NA)
                                        )
           )
           
@@ -1265,6 +1426,12 @@ metLMMsolver <- function(
     predictionsBind <- rbind(predictionsBind, avgDes)
   }
 
+  ##Adapt exports to SCA and GCA models
+  if(is_SCA_GCA | is_GCA){
+    predictionsBind[predictionsBind$effectType == "designation", "effectType"] = "designation_SCA"
+    predictionsBind[predictionsBind$effectType == "mother", "effectType"] = "mother_GCA"
+    predictionsBind[predictionsBind$effectType == "father", "effectType"] = "father_GCA"
+  }
 
   phenoDTfile$predictions <- rbind(phenoDTfile$predictions,
                                    predictionsBind[,colnames(phenoDTfile$predictions)])
