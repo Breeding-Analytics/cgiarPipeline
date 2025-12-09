@@ -238,7 +238,7 @@ metML <- function(
           }
           if(!is.null(randomTerm)){
             if(modelType == "rrblup"){
-              reduced <- with(mydataSub,sommer::redmm(x=designation,M=Mtrait, nPC=nPC, returnLam = TRUE))
+              reduced <- with(mydataSub,enhancer::redmm(x=designation,M=Mtrait, nPC=nPC, returnLam = TRUE))
               LGrp[["QTL"]] <- c((ncol(mydataSub)+1):(ncol(mydataSub)+ncol(reduced$Z)))
               mydataSub <- cbind(mydataSub,reduced$Z)
               rTermsTrait <- randomTerm[which(apply(data.frame(randomTerm),1,function(x){length(table(mydataSub[,x]))}) > 1)]
@@ -373,7 +373,7 @@ metML <- function(
                 }else{ A2inv <- diag(1)*mean(diag(A1inv)) } # there's only one individual to be added
                 colnames(A2inv) <- rownames(A2inv) <- differ
               }else{A2inv <- matrix(0,0,0)}
-              Ainv <- sommer::adiag1(A1inv,A2inv)
+              Ainv <- enhancer::adiag1(A1inv,A2inv)
               Ainv[lower.tri(Ainv)] <- t(Ainv)[lower.tri(Ainv)] # fill the lower triangular
               colnames(Ainv) <- rownames(Ainv) <- c(colnames(A1inv), colnames(A2inv))
               A1inv <- NULL; A2inv <- NULL;
@@ -433,7 +433,7 @@ metML <- function(
               ##
               Mfull <- Markers
               if((ncol(Mfull) < nrow(Mfull)) | nPC==0){M2 <- Mfull}else{  M2 <- tcrossprod(Mfull)}
-              xx2 = with(mydataSub, sommer::redmm(x=designation, M=M2, nPC=nPC, returnLam = TRUE)) # we need the new lambda for the fullt marker matrix
+              xx2 = with(mydataSub, enhancer::redmm(x=designation, M=M2, nPC=nPC, returnLam = TRUE)) # we need the new lambda for the fullt marker matrix
               ss <- mix$VarDf;  rownames(ss) <- ss$VarComp
               pp <- list()
               for(iGroup in names(LGrp)){ # iGroup <- names(LGrp)[1]  for each rrBLUP effect

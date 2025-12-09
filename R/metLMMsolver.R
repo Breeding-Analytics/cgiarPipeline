@@ -135,7 +135,7 @@ metLMMsolver <- function(
   ## EXTRACT POSSIBLE EXPLANATORY COVARIATES AND FORM KERNELS (30 lines)
   Weather <- cgiarPipeline::summaryWeather(phenoDTfile, wide=TRUE) # in form of covariates
   if(nrow(Weather) > 1){
-    Weather <- apply(Weather,2,sommer::imputev)
+    Weather <- apply(Weather,2,enhancer::imputev)
     colnames(Weather) <- gsub(" ","",colnames(Weather))
   }
   covars <- unique(unlist(expCovariates))
@@ -178,10 +178,10 @@ metLMMsolver <- function(
         # if(length(qas) > 0){
         #   modificationsMarkers <- phenoDTfile$modifications$geno[which(phenoDTfile$modifications$geno$analysisId %in% qas ),]
         #   Markers <- cgiarBase::applyGenoModifications(M=Markers, modifications=modificationsMarkers)
-        #   # if(length(which(is.na(Markers))) > 0){Markers <- apply(Markers,2,sommer::imputev)}
+        #   # if(length(which(is.na(Markers))) > 0){Markers <- apply(Markers,2,enhancer::imputev)}
         # }else{
-        #   missing <- apply(Markers,2,sommer::propMissing)
-        #   Markers <- apply(Markers[,which(missing < 0.9)],2,sommer::imputev)
+        #   missing <- apply(Markers,2,enhancer::propMissing)
+        #   Markers <- apply(Markers[,which(missing < 0.9)],2,enhancer::imputev)
         # }
         if(nPC["geno"] < 0){ # do not include extra individuals
           mydataX <-  phenoDTfile$predictions[which( phenoDTfile$predictions$analysisId %in% analysisId),]
@@ -392,7 +392,7 @@ metLMMsolver <- function(
               }else{ # iClassify is a character or a factor
                 wideTrait <- reshape(baseData[,c(iClassify,"designation","predictedValue")], direction = "wide",
                                      idvar = "designation", timevar = iClassify, v.names = "predictedValue", sep= "_")
-                wideTrait <- apply(wideTrait[,-1],2,sommer::imputev)
+                wideTrait <- apply(wideTrait[,-1],2,enhancer::imputev)
                 colnames(wideTrait) <- gsub("predictedValue_","",colnames(wideTrait))
                 S <- cov(wideTrait)
                 S <- as.matrix(Matrix::nearPD(x = S, corr = FALSE,
