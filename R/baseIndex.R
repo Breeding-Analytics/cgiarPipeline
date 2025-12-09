@@ -37,7 +37,7 @@ baseIndex <- function(
   Wide.Mat <- Wide.Mat[,sort(trait)]
   colnames(Wide.Mat) <- sort(trait)
 
-  Wide.Mat <- apply(Wide.Mat,2,sommer::imputev)
+  Wide.Mat <- apply(Wide.Mat,2,enhancer::imputev)
 
   WideScaled <- data.frame(scale(Wide.Mat, center = TRUE, scale = TRUE))
   WideScaled[which(is.na(WideScaled), arr.ind = TRUE)] <- 0

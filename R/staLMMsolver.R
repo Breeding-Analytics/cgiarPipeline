@@ -186,7 +186,7 @@ staLMM <- function(
         keepToImpute <- which(toImpute %in% "numeric")
         if(length(keepToImpute) > 0){
           toImpute <- names(toImpute[keepToImpute])
-          for(iImpute in toImpute){mydataSub[, iImpute] <- sommer::imputev(mydataSub[, iImpute])}
+          for(iImpute in toImpute){mydataSub[, iImpute] <- enhancer::imputev(mydataSub[, iImpute])}
         }
         if(length(out) > 0){mydataSub[out,"trait"] <- NA} # set outliers to NA
         # do analysis
