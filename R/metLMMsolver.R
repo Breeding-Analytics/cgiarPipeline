@@ -281,7 +281,7 @@ metLMMsolver <- function(
             f <- rowSums(D) / ncol(D) #inbreeding fixed eff
             names(f) <- rownames(Markers)
 
-            D <- sommer::D.mat(D)
+            D <- sommer::D.mat(Markers-ploidyFactor)
             D <- D + diag(1e-5, ncol(D), ncol(D))
           }else{ #autopolyploid formula for digenic dominance (Batista et al. 2022)
 
