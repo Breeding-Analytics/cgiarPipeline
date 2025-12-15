@@ -1,7 +1,7 @@
 metASREML <- function(phenoDTfile = NULL,
                       analysisId = NULL,
                       analysisIdgeno = NULL,
-                      gsca = FALSE,
+                      #gsca = FALSE,
                       fixedTerm = NULL,
                       randomTerm = NULL,
                       covMod = NULL,
@@ -19,7 +19,7 @@ metASREML <- function(phenoDTfile = NULL,
                       maxIters = 50,
                       verbose = TRUE)
 {
-  #save(phenoDTfile,analysisId,analysisIdgeno,gsca,fixedTerm,randomTerm,covMod, addG, nFA,envsToInclude, trait, traitFamily, useWeights,calculateSE, heritLB,  heritUB, meanLB, meanUB, maxIters,  verbose, file="NewAsr.RData")
+  #save(phenoDTfile,analysisId,analysisIdgeno,fixedTerm,randomTerm,covMod, addG, nFA,envsToInclude, trait, traitFamily, useWeights,calculateSE, heritLB,  heritUB, meanLB, meanUB, maxIters,  verbose, file="NewAsr.RData")
   #library(asreml)
   '%!in%' <- function(x, y){! ('%in%'(x, y))}
   covMod <- lapply(covMod, gsub, pattern = "\\.", replacement = "")
@@ -66,19 +66,91 @@ metASREML <- function(phenoDTfile = NULL,
   ##########################################
   ## EXTRACT POSSIBLE EXPLANATORY COVARIATES AND FORM KERNELS (30 lines)
   Weather <- cgiarPipeline::summaryWeather(phenoDTfile, wide = TRUE) # in form of covariates
-  Weather <- apply(Weather, 2, enhancer::imputev)
+  Weather <- apply(Weather, 2, sommer::imputev)
   colnames(Weather) <- gsub(" ", "", colnames(Weather))
   
-  covars <- unique(unlist(addG))
-  randomTermForCovars <- setdiff(unique(unlist(randomTerm)), c("environment", "designation"))
-  fixedTermForCovars <- setdiff(unique(unlist(fixedTerm)), c("environment", "designation"))
-  G=D=N=Gad=NULL
   covkernel = c(
     "Relationship structure_Pedigree",
     "Relationship structure_GenoA",
     "Relationship structure_GenoD",
     "Relationship structure_GenoAD"
   )
+  covars <- unique(unlist(addG))
+  #We can assign random term to relationship structure
+  asignarRandom <- function(covkernel, covMod, randomTerm, fill = "none") {
+    # ============================================
+    #  VALIDACIÓN DE conflictOS ENTRE ESTRUCTURAS
+    # ============================================
+    # Crear data.frame combinando estructuras y random terms
+    df <- data.frame(
+      cov = unlist(covMod),
+      rnd = unlist(randomTerm),
+      stringsAsFactors = FALSE
+    )
+    covModtmp<-covMod
+    # Filtrar estructuras válidas (no "none")
+    df_struct <- df[df$cov != "none", ]
+    # Identificar estructuras repetidas
+    duplicated_structs <- names(which(table(df_struct$cov) > 1))
+    # Procesar cada estructura repetida
+    for (s in duplicated_structs) {
+      subset_df <- df_struct[df_struct$cov == s, ]
+      terms <- unique(subset_df$rnd)
+      # Caso permitido solo si aparecen mother y father
+      allowed <- (s == "Relationship structure_GenoA") && all(c("mother", "father") %in% terms) && length(terms) <= 2
+      if (!allowed) {
+        message(
+          "The structure '", s,
+          "' appears in different random terms: ",
+          paste(terms, collapse = ", "),
+          ". is only available when you have 'mother' and 'father' in GenoA. The structure was deleted."
+        )
+        # Eliminar esta estructura en todas las entradas de covMod
+        covModtmp <- lapply(covMod, function(x) x[x != s])
+      }else{
+        message("Structure '",s,"' kept renaming by associated randomTerm: ",paste(terms, collapse=", "))
+        covModtmp <- lapply(seq_along(covMod), function(i) {
+          x <- covMod[[i]]
+          r <- randomTerm[[i]]
+          # buscar coincidencias exactas donde x == s
+          idx <- which(x == s)
+          if (length(idx) == 0) return(x)
+          # por cada posición encontrada, renombrarla con su randomTerm asociado
+          for (k in seq_along(idx)) {
+            x[idx[k]] <- paste0(s, "_", r[idx[k]])
+          }
+          return(x)
+        })
+      }
+    }
+    # ============================================
+    #  ASIGNACIÓN ORIGINAL
+    # ============================================
+    match_idx <- sapply(covMod, function(x) match(x, covkernel))
+    asignacion <- vector("list", length(covkernel))
+    for (i in seq_along(covMod)) {
+      rT <- which(!is.na(match_idx[[i]]))
+      if (length(rT)!=0) {
+        pos <- match_idx[[i]][rT]
+        if(is.null(asignacion[[pos]])){
+          asignacion[[pos]] <- randomTerm[[i]][rT]
+        }else{
+          asignacion[[pos]] <- c(asignacion[[pos]],randomTerm[[i]][rT])
+        }
+      }
+    }
+    if (!is.null(fill)) {
+      asignacion[sapply(asignacion, is.null)] <- fill
+    }
+    return(list(asignacion,covModtmp))
+  }
+  
+  randomTermForCovars <- asignarRandom(covkernel,covMod,randomTerm)
+  covMod<-randomTermForCovars[[2]]
+  randomTermForCovars<-randomTermForCovars[[1]]
+  fixedTermForCovars <- setdiff(unique(unlist(fixedTerm)), c("environment", "designation"))
+  G=D=N=Gad=NULL
+  
   if (any(covkernel %in% covars)) {
     #New structure Geno info
     if (class(phenoDTfile$data$geno)[1] == "genlight") {
@@ -92,21 +164,25 @@ metASREML <- function(phenoDTfile = NULL,
         Markers <- cgiarBase::applyGenoModifications(M = Markers, modifications =
                                                        modificationsMarkers)
         if (length(which(is.na(Markers))) > 0) {
-          Markers <- apply(Markers, 2, enhancer::imputev)
+          Markers <- apply(Markers, 2, sommer::imputev)
         }
       } else{
-        missing <- apply(Markers, 2, enhancer::propMissing)
-        Markers <- apply(Markers[, which(missing < 0.9)], 2, enhancer::imputev)
+        missing <- apply(Markers, 2, sommer::propMissing)
+        Markers <- apply(Markers[, which(missing < 0.9)], 2, sommer::imputev)
       }
     }
     ploidyFactor <- max(Markers) / 2
     mydata <- phenoDTfile$predictions
     mydata <- mydata[which(mydata$analysisId %in% analysisId), ]
-    
-    if ("Relationship structure_GenoA" %in% covars) {
+    if ("Relationship structure_GenoA_mother" %in% covars) {
       # additive model
-      message(paste(" Marker A kernel is requested"))
-      males <- as.character(unique(mydata$designation))
+      message(paste(" Marker A mother kernel is requested"))
+      #males <- as.character(unique(mydata$designation))
+      males <- as.character(unique(mydata[,c("mother")]))
+      check1<-length(intersect(rownames(Markers), c(males)))
+      if(check1<length(males)/2){
+        stop("Individuals associated with marker matrix should have the same length. Please check both sources",call. = FALSE)
+      }
       Markers <- Markers[intersect(rownames(Markers), c(males)), ]
       G <- sommer::A.mat(as.matrix(Markers - ploidyFactor))
       missing <- setdiff(c(males), rownames(G))
@@ -114,14 +190,57 @@ metASREML <- function(phenoDTfile = NULL,
                   nrow = length(missing),
                   ncol = length(missing))
       rownames(A1m) <- colnames(A1m) <- missing
-      G <- enhancer::adiag1(G, A1m)
-      G <- G + diag(1e-5, ncol(G), ncol(G))
+      G <- sommer::adiag1(G, A1m)
+      Gm <- G + diag(1e-5, ncol(G), ncol(G))
+    } # additive model mother
+    if ("Relationship structure_GenoA_father" %in% covars) {
+      # additive model
+      message(paste(" Marker A kernel is requested"))
+      #males <- as.character(unique(mydata$designation))
+      males <- as.character(unique(mydata[,c("father")]))
+      check1<-length(intersect(rownames(Markers), c(males)))
+      if(check1<length(males)/2){
+        stop("Individuals associated with marker matrix should have the same length. Please check both sources",call. = FALSE)
+      }
+      Markers <- Markers[intersect(rownames(Markers), c(males)), ]
+      G <- sommer::A.mat(as.matrix(Markers - ploidyFactor))
+      missing <- setdiff(c(males), rownames(G))
+      A1m <- diag(mean(diag(G)),
+                  nrow = length(missing),
+                  ncol = length(missing))
+      rownames(A1m) <- colnames(A1m) <- missing
+      G <- sommer::adiag1(G, A1m)
+      Gf <- G + diag(1e-5, ncol(G), ncol(G))
+    } # additive model father
+    if ("Relationship structure_GenoA" %in% covars) {
+      # additive model
+      message(paste(" Marker A kernel is requested"))
+      #males <- as.character(unique(mydata$designation))
+        males <- as.character(unique(mydata[,randomTermForCovars[[2]]]))
+        check1<-length(intersect(rownames(Markers), c(males)))
+        if(check1<length(males)/2){
+          stop("Individuals associated with marker matrix should have the same length. Please check both sources",call. = FALSE)
+        }
+        Markers <- Markers[intersect(rownames(Markers), c(males)), ]
+        G <- sommer::A.mat(as.matrix(Markers - ploidyFactor))
+        missing <- setdiff(c(males), rownames(G))
+        A1m <- diag(mean(diag(G)),
+                  nrow = length(missing),
+                  ncol = length(missing))
+        rownames(A1m) <- colnames(A1m) <- missing
+        G <- sommer::adiag1(G, A1m)
+        G <- G + diag(1e-5, ncol(G), ncol(G))
     } # additive model
     if ("Relationship structure_GenoD" %in% covars) {
       #Dominance kernel
       if (ploidyFactor == 1) {
         message(paste(" Marker D kernel is requested"))
-        males <- as.character(unique(mydata$designation))
+        males <- as.character(unique(mydata[,randomTermForCovars[[3]]]))
+        check1<-length(intersect(rownames(Markers), c(males)))
+        if(check1<length(males)/2){
+          stop("Individuals associated with marker matrix should have the same length. Please check both sources",call. = FALSE)
+        }
+        #males <- as.character(unique(mydata$designation))
         Markers <- Markers[intersect(rownames(Markers), c(males)), ]
         D <- 1 - abs(Markers)
         f <- rowSums(D) / ncol(D) #inbreeding fixed eff
@@ -132,12 +251,18 @@ metASREML <- function(phenoDTfile = NULL,
                     nrow = length(missing),
                     ncol = length(missing))
         rownames(A1m) <- colnames(A1m) <- missing
-        D <- enhancer::adiag1(D, A1m)
+        D <- sommer::adiag1(D, A1m)
         Gd <- D + diag(1e-5, ncol(D), ncol(D))
       } else{
         #autopolyploid formula for digenic dominance (Batista et al. 2022)
         message(paste(" Marker D kernel is requested"))
         ploidy <- ploidyFactor * 2
+        males <- as.character(unique(mydata[,randomTermForCovars[[3]]]))
+        check1<-length(intersect(rownames(Markers), c(males)))
+        if(check1<length(males)/2){
+          stop("Individuals associated with marker matrix should have the same length. Please check both sources",call. = FALSE)
+        }
+        Markers <- Markers[intersect(rownames(Markers), c(males)), ]
         dom_matrix = as.matrix(Markers / ploidy)
         dom_matrix = 4 * dom_matrix - 4 * (dom_matrix * dom_matrix)
         f <- rowSums(dom_matrix) / ncol(dom_matrix) #inbreeding fixed eff
@@ -161,6 +286,12 @@ metASREML <- function(phenoDTfile = NULL,
     if ("Relationship structure_GenoAD" %in% covars) {
       # additive + dominance model
       message(paste(" Marker AD kernel is requested"))
+      males <- as.character(unique(mydata[,randomTermForCovars[[4]]]))
+      check1<-length(intersect(rownames(Markers), c(males)))
+      if(check1<length(males)/2){
+        stop("Individuals associated with marker matrix should have the same length. Please check both sources",call. = FALSE)
+      }
+      Markers <- Markers[intersect(rownames(Markers), c(males)), ]
       Markers <- apply(Markers + 1, 2, log)
       Gad <- sommer::A.mat(as.matrix(Markers))
       Gad <- Gad + diag(1e-5, ncol(Gad), ncol(Gad))
@@ -257,6 +388,8 @@ metASREML <- function(phenoDTfile = NULL,
       "Structure model_diag" = paste0("diag(", y, ")"),
       "Structure model_us" = paste0("us(", y, ")"),
       "Relationship structure_GenoA" = paste0("vm(", y, ",source = G)"),
+      "Relationship structure_GenoA_mother" = paste0("vm(", y, ",source = Gm)"),
+      "Relationship structure_GenoA_father" = paste0("vm(", y, ",source = Gf)"),
       "Relationship structure_Pedigree" = paste0("vm(", y, ",source = N)"),
       "Relationship structure_GenoAD" = paste0("vm(", y, ",source = Gad)"),
       "Relationship structure_GenoD" = paste0("vm(", y, ",source = Gd)"),
@@ -394,6 +527,7 @@ metASREML <- function(phenoDTfile = NULL,
     mydataSub <- myDataTraits[[iTrait]] # extract dataset
     fixedTermSub <- fixedTermTrait[[iTrait]]
     randomTermSub <- randomTermTrait[[iTrait]]
+    
     ## deregress if needed
     VarFull <- var(mydataSub[, "predictedValue"], na.rm = TRUE) # total variance
     effectTypeTrait <- phenoDTfile$modeling[which(
@@ -412,6 +546,11 @@ metASREML <- function(phenoDTfile = NULL,
     # warnin messages in weights use
     message(" Using weights in the analysis. Residual variance will be fixed to 1. ")
     
+    #Generate envIndex for finlay and wilkinson model
+    if(grepl("envIndex",randomTermSub)){
+      envIndex <- ave(mydataSub$predictedValue, mydataSub$environment, FUN = function(x) mean(x) - mean(mydataSub$predictedValue))
+      mydataSub$envIndex <- envIndex
+    }
     #trasform to factor variables
     labfactor <- c(
       "environment",
@@ -586,6 +725,8 @@ metASREML <- function(phenoDTfile = NULL,
              "Structure model_diag" = paste0(y),
              "Structure model_us" = paste0(y),
              "Relationship structure_GenoA" = paste0("vm(", y, ", source = G)"),
+             "Relationship structure_GenoA_mother" = paste0("vm(", y, ", source = Gm)"),
+             "Relationship structure_GenoA_father" = paste0("vm(", y, ", source = Gf)"),
              "Relationship structure_Pedigree" = paste0("vm(", y, ", source = N)"),
              "Relationship structure_GenoAD" = paste0("vm(", y, ", source = Gad)"),
              "Relationship structure_GenoD" = paste0("vm(", y, ", source = Gd)"),
@@ -679,7 +820,7 @@ metASREML <- function(phenoDTfile = NULL,
       pp[["GenCorrMat"]] <- prov
     }
         
-    if (gsca == T) {
+    if (length(which(subgroupGen%in%c("mother","father")== T)>=2)) {
       gca = summary(mix, coef = TRUE)$coef.random
       prov <- data.frame(
         designation = rownames(gca),
@@ -688,9 +829,14 @@ metASREML <- function(phenoDTfile = NULL,
         reliability = rep(NA, dim(gca)[1]),
         trait = iTrait,
         effectType = "GCA/SCA" ,
-        environment = "GCA/SCA",
+        environment = "overall",
         entryType = "unknown"
       )
+      prov$effectType[which(grepl("mother", prov$designation, ignore.case = TRUE))]="mother_GCA"
+      prov$effectType[which(grepl("father", prov$designation, ignore.case = TRUE))]="father_GCA"
+      if(length(which(subgroupGen%in%"designation"==T)!=0)){
+        prov$effectType[which(grepl("designation", rownames(gca), ignore.case = TRUE))]="designation_SCA"
+      }
       pp[["GCA/SCA"]] <- prov
     }
     
@@ -698,21 +844,18 @@ metASREML <- function(phenoDTfile = NULL,
     if (length(groupingSub)!=0){
     for (iGroup in groupingSub) {
       #for( iGroup in names(groupingSub)){ # iGroup=groupingSub[2]
-      if (iGroup %in% subgroupGen) {
-        Vg <- ss[iGroup, "component"]
-      } else{
-        Vg <- NA
-      }
       
       blup = predict(mix, classify = iGroup)$pvals
       if (all(blup$status == "Aliased")) {
         statusmetrics = "Aliased estimation, problems with the model, please check!"
         stdError <- reliability <- rep(NA, dim(blup)[1])
+        Vg <- NA
         lsdt <- NA
       } else{
         statusmetrics = mix$converge
         message(paste(" Calculating standar errors for",iTrait,iGroup,"predictions"))
         stdError <- blup$std.error # random effect was just one column
+        if (iGroup %in% subgroupGen) {Vg <- var(blup$predicted.value) + ((stdError^2)/length(stdError))} else {Vg<-NA}
         reliability <- abs((Vg - (stdError^2)) / Vg) # reliability <- abs((Vg - Matrix::diag(pev))/Vg)
         lsdt <- qt(1 - 0.05 / 2, round(mix$nedf)) * predict(mix, classify =iGroup)$avsed
       }
@@ -732,6 +875,12 @@ metASREML <- function(phenoDTfile = NULL,
         nameblup1 = iGroup
       } else{
         if (relstrGen[which(subgroupGen %in% iGroup == T)] == "Relationship structure_GenoA") {
+          effTypeSub = paste0(oriGen[which(subgroupGen %in% iGroup == T)], "A")
+        }
+        if (relstrGen[which(subgroupGen %in% iGroup == T)] == "Relationship structure_GenoA_mother") {
+          effTypeSub = paste0(oriGen[which(subgroupGen %in% iGroup == T)], "A")
+        }
+        if (relstrGen[which(subgroupGen %in% iGroup == T)] == "Relationship structure_GenoA_father") {
           effTypeSub = paste0(oriGen[which(subgroupGen %in% iGroup == T)], "A")
         }
         if (relstrGen[which(subgroupGen %in% iGroup == T)] == "Relationship structure_GenoD") {
