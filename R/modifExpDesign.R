@@ -14,7 +14,8 @@ modifExpDesign <- function(object, df){
     for(j in 1:nrow(df)){ # for each environment
       if(df[j,i] == 0){ # if user wants to delete this information
         rowsToSilence <- which(mydata[,envCol] == rownames(df)[j]) # rows for this environments
-        myList[[counter]] <- data.frame(module="qaDesign",analysisId=analysisId,trait=colnames(df)[i],reason="badDesign",row=rowsToSilence, value=NA);
+        valueToSilence <- mydata[rowsToSilence,object$metadata$pheno[which(object$metadata$pheno$parameter == colnames(df)[i]),"value"]]
+        myList[[counter]] <- data.frame(module="qaDesign",analysisId=analysisId,trait=colnames(df)[i],reason="badDesign",row=rowsToSilence, value=valueToSilence);
         counter <- counter + 1
       }
     }
