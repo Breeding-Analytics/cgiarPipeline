@@ -19,7 +19,7 @@ metASREML <- function(phenoDTfile = NULL,
                       maxIters = 50,
                       verbose = TRUE)
 {
-  save(phenoDTfile,analysisId,analysisIdgeno,fixedTerm,randomTerm,covMod, addG, nFA,envsToInclude, trait, traitFamily, useWeights,calculateSE, heritLB,  heritUB, meanLB, meanUB, maxIters,  verbose, file="NewAsr.RData")
+  #save(phenoDTfile,analysisId,analysisIdgeno,fixedTerm,randomTerm,covMod, addG, nFA,envsToInclude, trait, traitFamily, useWeights,calculateSE, heritLB,  heritUB, meanLB, meanUB, maxIters,  verbose, file="NewAsr.RData")
   #library(asreml)
   '%!in%' <- function(x, y){! ('%in%'(x, y))}
   covMod <- lapply(covMod, gsub, pattern = "\\.", replacement = "")
@@ -1309,5 +1309,6 @@ metASREML <- function(phenoDTfile = NULL,
   
   return(phenoDTfile)
 }
+
 
 
