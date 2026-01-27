@@ -36,9 +36,9 @@ gwas <- function (
         if(length(which(adegenet::glNA(Markers) > 0)) > 0){stop("Markers have missing data and your Id didn't have a match in the modifications table to impute the genotype data.", call. = FALSE)}
       }
     }
-  }
-  
-  entryType <- unique(phenoDTfile$predictions[phenoDTfile$predictions$module %in% c("sta","mtaLmms"),"entryType"])
+  }   
+    
+  entryType <- unique(phenoDTfile$predictions[phenoDTfile$predictions$module %in% c("sta","mtaLmms","mtaAsr"),"entryType"])
   entryType <- ifelse(length(entryType) > 1, sort(entryType)[1], entryType)
   
   for(iTrait in trait) {
