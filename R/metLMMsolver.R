@@ -82,6 +82,16 @@ metLMMsolver <- function(
     ok
   }
   
+  #Scaling kernels mean(diag) to 1
+  .scale_factor_mean_diag1 <- function(M, eps = 1e-12) {
+    # K = M %*% t(M)  => diag(K) = rowSums(M^2)
+    # We want mean(diag(K)) = 1, so scale M by 1/sqrt(mean(diag(K))).
+    Mm <- as.matrix(M)
+    c <- mean(rowSums(Mm^2), na.rm = TRUE)
+    if (!is.finite(c) || c <= eps) stop("Kernel factor has invalid mean diagonal scaling", call. = FALSE)
+    M / sqrt(c)
+  }
+  
   #Flags for SCA and GCA models
   is_SCA_GCA = FALSE
   is_GCA = FALSE
@@ -708,7 +718,16 @@ metLMMsolver <- function(
                     # 2) Align the kernel rows to those (dropped) levels
                     M  <- M[levels(xf), , drop = FALSE]
                     
-                    # 3) Call redmm
+                    # 3) Normalize kernel
+                    is_kernel_factor <- expCovariatesProv[[irandom]][irandom2] %in%
+                      c("weather","geno","genoA","genoAD","genoD","pedigree") ||
+                      expCovariatesProv[[irandom]][irandom2] %in% traitsForExpCovariates
+                    
+                    if (is_kernel_factor) {
+                      M <- .scale_factor_mean_diag1(M)
+                    }
+                    
+                    # 4) Call redmm
                     xx <- enhancer::redmm(x = xf, M = M, nPC = 0)
                   }else{
                     if(sommerVersion < 44){
@@ -1142,11 +1161,33 @@ metLMMsolver <- function(
                 }
                 stdError <- unlist(stdError, use.names = FALSE)
               }
-            reliability <- abs((Vg - (stdError^2)) /Vg) # reliability <- abs((Vg - Matrix::diag(pev))/Vg)
+            
+            eps_vg <- 1e-12
+            # If Vg is NA, non-finite, or essentially zero, reliability is undefined → set to 0 (or NA)
+            if (!is.finite(Vg) || is.na(Vg) || Vg <= eps_vg) {
+              reliability <- rep(0, length(blup))   # alternative: rep(NA_real_, length(blup))
+            } else {
+              pev_diag <- stdError^2
+              
+              # Default 
+              denom <- rep(Vg, length(pev_diag))
+              
+              if (!use_formula) {
+                # K = M %*% t(M) so diag(K) = rowSums(M^2)
+                M_u <- Msub[[iGroup]]
+                kii <- rowSums(as.matrix(M_u)^2)
+                
+                # avoid zeros 
+                eps_kii <- 1e-12
+                kii[!is.finite(kii) | is.na(kii) | kii <= eps_kii] <- NA_real_
+                
+                denom <- Vg * kii
+              }
+              
+              reliability <- 1 - (pev_diag / denom)
+              reliability <- pmin(pmax(reliability, 0), 1)
+            }
           }else{stdError <- reliability <- rep(NA,length(blup))}
-          
-          badRels <- which(reliability > 1); if(length(badRels) > 0){reliability[badRels] <- 0.9999}
-          badRels2 <- which(reliability < 0); if(length(badRels2) > 0){reliability[badRels2] <- 0}
           
           envCol <- envsSub[[iGroup]]
           if (length(envCol) == 1L) envCol <- rep(envCol, length(blup))
@@ -1223,14 +1264,34 @@ metLMMsolver <- function(
           
           ## PEV-corrected variance of this random effect (Fernández-González & Isidro y Sánchez, 2025, Eq. 4)
           var_PEV <- NA_real_
+          eps_vg  <- 1e-12
           
-          if (isTRUE(calculateSE) && length(blup) > 0L) {
+          if (!is.finite(Vg) || is.na(Vg) || Vg <= eps_vg) {
+            var_PEV <- 0  
+          } else if (isTRUE(calculateSE) && length(blup) > 0L) {
             ok <- which(!is.na(blup) & !is.na(stdError))
             if (length(ok) > 0L) {
               n_eff     <- length(ok)
               var_hat   <- sum(blup[ok]^2) / n_eff
               mean_pev  <- sum(stdError[ok]^2) / n_eff   # tr(PEV)/n using only diagonal
-              var_PEV   <- var_hat + mean_pev            # σ^2 = var(â) + tr(PEV)/n
+              var_u   <- var_hat + mean_pev            # σ^2 = var(â) + tr(PEV)/n
+              
+              mean_diagK <- 1
+              
+              #kernel scaling:
+              if (!use_formula) {
+                #diag(K) = rowSums(M^2).
+                Mu <- Msub[[iGroup]]
+                kii <- rowSums(as.matrix(Mu)^2)
+                mean_diagK <- mean(kii[ok], na.rm = TRUE)
+              }
+              
+              if (is.finite(mean_diagK) && mean_diagK > 0) {
+                var_PEV <- var_u / mean_diagK
+              } else {
+                var_PEV <- NA_real_
+              }
+              
             }
           }
           
