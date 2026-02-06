@@ -66,14 +66,15 @@ metASREML <- function(phenoDTfile = NULL,
   ##########################################
   ## EXTRACT POSSIBLE EXPLANATORY COVARIATES AND FORM KERNELS (30 lines)
   Weather <- cgiarPipeline::summaryWeather(phenoDTfile, wide = TRUE) # in form of covariates
-  Weather <- apply(Weather, 2, sommer::imputev)
+  Weather <- apply(Weather, 2, enhancer::imputev)
   colnames(Weather) <- gsub(" ", "", colnames(Weather))
   
   covkernel = c(
     "Relationship structure_Pedigree",
     "Relationship structure_GenoA",
     "Relationship structure_GenoD",
-    "Relationship structure_GenoAD"
+    "Relationship structure_GenoAD",
+    "weatherInfo"
   )
   covars <- unique(unlist(addG))
   #We can assign random term to relationship structure
@@ -147,9 +148,10 @@ metASREML <- function(phenoDTfile = NULL,
   
   randomTermForCovars <- asignarRandom(covkernel,covMod,randomTerm)
   covMod<-randomTermForCovars[[2]]
+  covars<-unlist(covMod)
   randomTermForCovars<-randomTermForCovars[[1]]
   fixedTermForCovars <- setdiff(unique(unlist(fixedTerm)), c("environment", "designation"))
-  G=D=N=Gad=NULL
+  G=D=N=Gad=WI=NULL
   
   if (any(covkernel %in% covars)) {
     #New structure Geno info
@@ -164,11 +166,11 @@ metASREML <- function(phenoDTfile = NULL,
         Markers <- cgiarBase::applyGenoModifications(M = Markers, modifications =
                                                        modificationsMarkers)
         if (length(which(is.na(Markers))) > 0) {
-          Markers <- apply(Markers, 2, sommer::imputev)
+          Markers <- apply(Markers, 2, enhancer::imputev)
         }
       } else{
-        missing <- apply(Markers, 2, sommer::propMissing)
-        Markers <- apply(Markers[, which(missing < 0.9)], 2, sommer::imputev)
+        missing <- apply(Markers, 2, enhancer::propMissing)
+        Markers <- apply(Markers[, which(missing < 0.9)], 2, enhancer::imputev)
       }
     }
     ploidyFactor <- max(Markers) / 2
@@ -183,33 +185,33 @@ metASREML <- function(phenoDTfile = NULL,
       if(check1<length(males)/2){
         stop("Individuals associated with marker matrix should have the same length. Please check both sources",call. = FALSE)
       }
-      Markers <- Markers[intersect(rownames(Markers), c(males)), ]
-      G <- sommer::A.mat(as.matrix(Markers - ploidyFactor))
+      MarkersAm <- Markers[intersect(rownames(Markers), c(males)), ]
+      G <- sommer::A.mat(as.matrix(MarkersAm - ploidyFactor))
       missing <- setdiff(c(males), rownames(G))
       A1m <- diag(mean(diag(G)),
                   nrow = length(missing),
                   ncol = length(missing))
       rownames(A1m) <- colnames(A1m) <- missing
-      G <- sommer::adiag1(G, A1m)
+      G <- enhancer::adiag1(G, A1m)
       Gm <- G + diag(1e-5, ncol(G), ncol(G))
     } # additive model mother
     if ("Relationship structure_GenoA_father" %in% covars) {
       # additive model
-      message(paste(" Marker A kernel is requested"))
+      message(paste(" Marker A father kernel is requested"))
       #males <- as.character(unique(mydata$designation))
       males <- as.character(unique(mydata[,c("father")]))
       check1<-length(intersect(rownames(Markers), c(males)))
       if(check1<length(males)/2){
         stop("Individuals associated with marker matrix should have the same length. Please check both sources",call. = FALSE)
       }
-      Markers <- Markers[intersect(rownames(Markers), c(males)), ]
-      G <- sommer::A.mat(as.matrix(Markers - ploidyFactor))
+      MarkersAf <- Markers[intersect(rownames(Markers), c(males)), ]
+      G <- sommer::A.mat(as.matrix(MarkersAf - ploidyFactor))
       missing <- setdiff(c(males), rownames(G))
       A1m <- diag(mean(diag(G)),
                   nrow = length(missing),
                   ncol = length(missing))
       rownames(A1m) <- colnames(A1m) <- missing
-      G <- sommer::adiag1(G, A1m)
+      G <- enhancer::adiag1(G, A1m)
       Gf <- G + diag(1e-5, ncol(G), ncol(G))
     } # additive model father
     if ("Relationship structure_GenoA" %in% covars) {
@@ -221,14 +223,14 @@ metASREML <- function(phenoDTfile = NULL,
         if(check1<length(males)/2){
           stop("Individuals associated with marker matrix should have the same length. Please check both sources",call. = FALSE)
         }
-        Markers <- Markers[intersect(rownames(Markers), c(males)), ]
-        G <- sommer::A.mat(as.matrix(Markers - ploidyFactor))
+        MarkersA <- Markers[intersect(rownames(Markers), c(males)), ]
+        G <- sommer::A.mat(as.matrix(MarkersA - ploidyFactor))
         missing <- setdiff(c(males), rownames(G))
         A1m <- diag(mean(diag(G)),
                   nrow = length(missing),
                   ncol = length(missing))
         rownames(A1m) <- colnames(A1m) <- missing
-        G <- sommer::adiag1(G, A1m)
+        G <- enhancer::adiag1(G, A1m)
         G <- G + diag(1e-5, ncol(G), ncol(G))
     } # additive model
     if ("Relationship structure_GenoD" %in% covars) {
@@ -241,17 +243,17 @@ metASREML <- function(phenoDTfile = NULL,
           stop("Individuals associated with marker matrix should have the same length. Please check both sources",call. = FALSE)
         }
         #males <- as.character(unique(mydata$designation))
-        Markers <- Markers[intersect(rownames(Markers), c(males)), ]
-        D <- 1 - abs(Markers)
+        MarkersD <- Markers[intersect(rownames(Markers), c(males)), ]
+        D <- 1 - abs(MarkersD)
         f <- rowSums(D) / ncol(D) #inbreeding fixed eff
-        names(f) <- rownames(Markers)
+        names(f) <- rownames(MarkersD)
         D <- sommer::D.mat(as.matrix(D))
         missing <- setdiff(c(males), rownames(D))
         A1m <- diag(mean(diag(D)),
                     nrow = length(missing),
                     ncol = length(missing))
         rownames(A1m) <- colnames(A1m) <- missing
-        D <- sommer::adiag1(D, A1m)
+        D <- enhancer::adiag1(D, A1m)
         Gd <- D + diag(1e-5, ncol(D), ncol(D))
       } else{
         #autopolyploid formula for digenic dominance (Batista et al. 2022)
@@ -262,13 +264,13 @@ metASREML <- function(phenoDTfile = NULL,
         if(check1<length(males)/2){
           stop("Individuals associated with marker matrix should have the same length. Please check both sources",call. = FALSE)
         }
-        Markers <- Markers[intersect(rownames(Markers), c(males)), ]
-        dom_matrix = as.matrix(Markers / ploidy)
+        MarkersD <- Markers[intersect(rownames(Markers), c(males)), ]
+        dom_matrix = as.matrix(MarkersD / ploidy)
         dom_matrix = 4 * dom_matrix - 4 * (dom_matrix * dom_matrix)
         f <- rowSums(dom_matrix) / ncol(dom_matrix) #inbreeding fixed eff
-        names(f) <- rownames(Markers)
-        MAF <- colMeans(Markers, na.rm = TRUE) / ploidy
-        tMarkers <- t(Markers)
+        names(f) <- rownames(MarkersD)
+        MAF <- colMeans(MarkersD, na.rm = TRUE) / ploidy
+        tMarkers <- t(MarkersD)
         C_mat <- matrix(choose(ploidy, 2),
                         nrow = nrow(tMarkers),
                         ncol = ncol(tMarkers))
@@ -291,9 +293,9 @@ metASREML <- function(phenoDTfile = NULL,
       if(check1<length(males)/2){
         stop("Individuals associated with marker matrix should have the same length. Please check both sources",call. = FALSE)
       }
-      Markers <- Markers[intersect(rownames(Markers), c(males)), ]
-      Markers <- apply(Markers + 1, 2, log)
-      Gad <- sommer::A.mat(as.matrix(Markers))
+      MarkersAD <- Markers[intersect(rownames(Markers), c(males)), ]
+      MarkersAD <- apply(MarkersAD + 1, 2, log)
+      Gad <- sommer::A.mat(as.matrix(MarkersAD))
       Gad <- Gad + diag(1e-5, ncol(Gad), ncol(Gad))
     } # additive + dominance model
     ## PEDIGREE KERNEL
@@ -304,6 +306,18 @@ metASREML <- function(phenoDTfile = NULL,
       Pedigree <- Pedigree[!duplicated(Pedigree[, 1]), ]
       Pedigree <- Pedigree[which(Pedigree[, 1] %in% unique(mydataX$designation)), ]
       N <- asreml::ainverse(Pedigree)
+    }
+    ## WEATHER KERNEL
+    if("weatherInfo" %in% covars & !is.null(Weather)){
+      message(paste(" Weather kernel is requested"))
+      WeatherK <- Weather
+      rownamesWeather <- rownames(WeatherK)
+      WeatherK <- apply(WeatherK, 2, scale)
+      WeatherK <- WeatherK[,which( !is.na(apply(WeatherK,2,var)) ), drop=FALSE]
+      rownames(WeatherK) <- rownamesWeather
+      WI <- sommer::A.mat(WeatherK)
+      WI <- WI + diag(1e-5, ncol(WI), ncol(WI))
+      #Wchol <- t(chol(W))
     }
   }
   ## COMPLETE THE CLEANING PARAMETERS (7 lines)
@@ -393,6 +407,7 @@ metASREML <- function(phenoDTfile = NULL,
       "Relationship structure_Pedigree" = paste0("vm(", y, ",source = N)"),
       "Relationship structure_GenoAD" = paste0("vm(", y, ",source = Gad)"),
       "Relationship structure_GenoD" = paste0("vm(", y, ",source = Gd)"),
+      "weatherInfo" = paste0("vm(", y, ",source = WI)"),
       stop("Invalid `x` value")
     )
   }
@@ -578,7 +593,8 @@ metASREML <- function(phenoDTfile = NULL,
       mydataSub[, unique(unlist(randomTerm))[tranfactrandom]] = lapply(mydataSub[unique(unlist(randomTerm))[tranfactrandom]], as.factor)
     }
     
-    asreml::asreml.options(workspace = 300e7,pworkspace = 200e7,trace = T,ai.sing = T)
+    #asreml::asreml.options(workspace = 300e7,pworkspace = 200e7,trace = T,ai.sing = T)
+    asreml::asreml.options(trace = T,ai.sing = T)
     
     fixed_formula <- tryCatch(as.formula(fixedTermSub), error = function(e) return(NULL))
     random_formula <- tryCatch(as.formula(randomTermSub), error = function(e) return(NULL))
@@ -588,9 +604,10 @@ metASREML <- function(phenoDTfile = NULL,
     }
     
     family_arg <- eval(parse(text = traitFamily[iTrait]))
+    
     # Adjust model with asreml
     tryCatch({
-      mix <<- asreml::asreml(
+      mix<<-asreml::asreml(
         fixed = fixed_formula,
         random = random_formula,
         data = mydataSub,
@@ -599,14 +616,17 @@ metASREML <- function(phenoDTfile = NULL,
         weights = w,
         family = family_arg,	
         envir = .GlobalEnv
-      )      
-      #summary(mix)
-    }, error = function(e) {
-      paste("❌ Error to adjust model:", e$message)
-    })
+      )
+    }, 
+      error = function(e) {
+        message("❌ Error to adjust model:", e$message)
+      }
+      #warning = function(w) {
+      #  message("Warning: ", w$message)
+      #}
+    )
   
   
-
     update_until_converged <- function(model, max_updates = 10, verbose = TRUE) {
       count <- 0
       while (!model$converge && count < max_updates) {
@@ -730,6 +750,7 @@ metASREML <- function(phenoDTfile = NULL,
              "Relationship structure_Pedigree" = paste0("vm(", y, ", source = N)"),
              "Relationship structure_GenoAD" = paste0("vm(", y, ", source = Gad)"),
              "Relationship structure_GenoD" = paste0("vm(", y, ", source = Gd)"),
+             "weatherInfo" = paste0("vm(", y, ",source = WI)"),
              stop("Invalid `x` value")
       )
     }
@@ -819,8 +840,9 @@ metASREML <- function(phenoDTfile = NULL,
       )
       pp[["GenCorrMat"]] <- prov
     }
-        
-    if (length(which(subgroupGen%in%c("mother","father")== T)>=2)) {
+    
+    #if (length(which(subgroupGen%in%c("mother","father")== T)>=2)) {
+    if(all(unlist(lapply(c("mother", "father"), function(x) any(grepl(x, subgroupGen)))))){
       gca = summary(mix, coef = TRUE)$coef.random
       prov <- data.frame(
         designation = rownames(gca),
@@ -843,7 +865,7 @@ metASREML <- function(phenoDTfile = NULL,
     groupingSub = c(subgroupGen, subgroupInt)
     if (length(groupingSub)!=0){
     for (iGroup in groupingSub) {
-      #for( iGroup in names(groupingSub)){ # iGroup=groupingSub[2]
+      #for( iGroup in names(groupingSub)){ # iGroup=groupingSub[4]
       
       blup = predict(mix, classify = iGroup)$pvals
       if (all(blup$status == "Aliased")) {
@@ -871,7 +893,7 @@ metASREML <- function(phenoDTfile = NULL,
       
       if (iGroup %in% subgroupInt) {
         effTypeSub = "environment_designation"
-        envTypeSub = blup$environment
+        envTypeSub = blup[,grep("environment", names(blup))]
         nameblup1 = iGroup
       } else{
         if (relstrGen[which(subgroupGen %in% iGroup == T)] == "Relationship structure_GenoA") {
@@ -892,6 +914,9 @@ metASREML <- function(phenoDTfile = NULL,
         if (relstrGen[which(subgroupGen %in% iGroup == T)] == "Relationship structure_Pedigree") {
           effTypeSub = paste0(oriGen[which(subgroupGen %in% iGroup == T)], "Ped")
         }
+        if (relstrGen[which(subgroupGen %in% iGroup == T)] == "weatherInfo") {
+          effTypeSub = paste0(oriGen[which(subgroupGen %in% iGroup == T)], "Weather")
+        }
         if (relstrGen[which(subgroupGen %in% iGroup == T)] == "none") {
           effTypeSub = paste0(oriGen[which(subgroupGen %in% iGroup == T)], "Idv")
         }
@@ -902,7 +927,7 @@ metASREML <- function(phenoDTfile = NULL,
       
       if (ncol(blup) > 4) {
         namesblup = c(nameblup1, names(blup)[3:5])
-        blup = data.frame(cbind(paste0(blup[, 1], ":", blup[, 2]), blup[, 3], blup[, 4], blup[, 5]))
+        blup = data.frame(cbind(paste0(blup[,grep("environment", names(blup))], ":", blup[,grep("designation", names(blup))]), blup[, 3], blup[, 4], blup[, 5]))
         names(blup) = namesblup
         blup$predicted.value = as.numeric(blup$predicted.value)
       }
@@ -989,7 +1014,8 @@ metASREML <- function(phenoDTfile = NULL,
         "Relationship structure_GenoA",
         "Relationship structure_GenoD",
         "Relationship structure_Pedigree",
-        "Relationship structure_GenoAD"
+        "Relationship structure_GenoAD",
+        "weatherInfo"
       ) == T
     )], collapse = ",")
     if (length(kernels) == 0) { kernels = "none" }
