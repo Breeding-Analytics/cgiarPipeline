@@ -286,7 +286,7 @@ metLMMsolver <- function(
         if("genoD" %in% covars){ #Dominance kernel
           if(ploidyFactor == 1){
 
-            D <- 1-abs(Markers)
+            D <- 1-abs(Markers-ploidyFactor)
 
             f <- rowSums(D) / ncol(D) #inbreeding fixed eff
             names(f) <- rownames(Markers)
@@ -592,14 +592,15 @@ metLMMsolver <- function(
            
             randomTermTrait[[iTrait]] <- unique(randomTermProv[which(unlist(lapply(randomTermProv, length)) > 0)])
             entryTypeProv <- list()
-            
-            for(irandom in 1:length(randomTermProv)){
-              expCovariatesProv2 <- expCovariatesProv[[irandom]]
-              entryTypeProv[[irandom]] <- paste(expCovariatesProv2,collapse = ":")
-            }
+            if(!is.null(randomTermProv)){
+              for(irandom in 1:length(randomTermProv)){
+                expCovariatesProv2 <- expCovariatesProv[[irandom]]
+                entryTypeProv[[irandom]] <- paste(expCovariatesProv2,collapse = ":")
+              }
             
             names(envsProv) <- names(entryTypeProv) <- names(randomTermTrait[[iTrait]]) <- vapply(randomTermProv, function(x) paste(x, collapse = "_"), character(1))
             entryTypesTrait[[iTrait]] <- entryTypeProv
+            }
           }else{## We need to pass the full incidence matrices to LMMsolver
           ##################################################################
             if(!is.null(randomTermProv)){
@@ -890,12 +891,13 @@ metLMMsolver <- function(
     
     if(use_formula){
       
-      if (length(randomTermSub)) {
+      if (length(randomTermSub) > 0) {
         ranran <- paste(vapply(randomTermSub, function(x) paste(x, collapse=":"), ""),
                          collapse = " + ")
         ranran <- paste0("~",ranran)
         ranFormulation <- as.formula(ranran)
       } else {
+        ranran <- character()
         ranFormulation <- NULL
       }
       
