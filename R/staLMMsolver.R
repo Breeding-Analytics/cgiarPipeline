@@ -126,6 +126,17 @@ staLMM <- function(
   numericTraits <- which(traitTypes %in% c("numeric","integer"))
   if(length(numericTraits)==0){stop("None of the traits specified are numeric in nature. Please double check", call. = FALSE)}
   trait <- trait[numericTraits]
+  
+  # check if experimental design factor filtering is done
+  if(nrow(cleaning[which(cleaning$module == "qaDesign"),] > 0)){
+    cleaningSubDes <- cleaning[which(cleaning$trait %in% c("row","col","rep","iBlock")),]
+    
+    for (iDes in unique(cleaningSubDes$trait)){
+      outDes <- which(mydata$rowindex %in% cleaningSubDes[which(cleaningSubDes$trait == iDes), "row"])
+      mydata[outDes,iDes] <- NA
+    }
+  }
+  
   #####################################
   # single trial analysis
   fixedFormulaForFixedModel <- randomFormulaForFixedModel <- NULL
