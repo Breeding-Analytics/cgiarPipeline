@@ -28,6 +28,9 @@ premetLMMsolver <- function(phenoDTfile= NULL, fixedTerm= NULL, randomTerm=NULL)
   
   if(gxeModelNum > 0){
     gxeTerms <- modelTerms[which(modelTerms %in% gxeList[[gxeModelNum]])]
+    if(gxeModelNum == 1 & "designation:environment" %in% gxeTerms){
+      gxeTerms <- gsub("designation:environment", "environment:designation", gxeTerms)
+    }
   } else{
     gxeTerms <- NULL
   }
