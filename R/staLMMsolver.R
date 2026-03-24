@@ -5,6 +5,7 @@ staLMM <- function(
     traitFamily=NULL,
     fixedTerm=c("1"),
     genoUnit = c("designation"),
+    rowColRole = c("spatial", "design"),
     maxit=50,
     returnFixedGeno=TRUE,
     verbose=TRUE
@@ -20,6 +21,8 @@ staLMM <- function(
   names(traitFamily) <- trait
   # fixedTerm <- unique(c("1",fixedTerm,"designation"))
   fixedTerm <- unique(c("1", fixedTerm, genoUnit))
+  # Get row and column role
+  rowColRole <- match.arg(rowColRole, c("spatial", "design"))
 
   '%!in%' <- function(x,y)!('%in%'(x,y))
   if(is.null(phenoDTfile$metrics)){
@@ -210,33 +213,46 @@ staLMM <- function(
             }
 
             # find best experimental design formula
-            mde <- cgiarBase::asremlFormula(fixed=as.formula(paste("trait","~ 1")),
-                                            random=~ at(environmentF):rowF + at(environmentF):colF + at(environmentF):trialF + at(environmentF):repF + at(environmentF):iBlockF,
-                                            rcov=~at(environmentF):id(rowF):id(colF),
-                                            dat=droplevels(mydataSub[which(!is.na(mydataSub[,"trait"])),]),
+            
+            randomTerms <- c("trialF", "repF", "iBlockF")
+            
+            if(rowColRole == "design"){
+              randomTerms <- c("rowF", "colF", randomTerms)
+            }
+            
+            min_levels <- c(trialF = 2,repF = 2, iBlockF = 4)
+            
+            screened <- cgiarBase::screen_sta_random_effects(
+              random_effects = randomTerms,
+              dat = mydataSub,
+              min_levels = min_levels
+            )
+            
+            screened$summary
+            
+            resid_screen <- cgiarBase::screen_sta_residual_terms(
+              residual_terms = c("rowF", "colF"),
+              dat = mydataSub,
+              min_levels = c(rowF = 5, colF = 5)
+            )
+            
+            
+            resid_screen$summary
+            
 
-                                            minRandomLevels=list(rowF= 3, colF=3, trialF=2,repF=2, iBlockF=4),
-                                            minResidualLevels=list(rowF=5, colF=5),
-
-                                            exchangeRandomEffects=list(rowF="colF", colF="rowF"),
-
-                                            exchangeResidualEffects=list(rowF="colF", colF="rowF"),
-
-                                            customRandomLevels=NULL, customResidualLevels=NULL,
-
-                                            xCoordinate= "rowF",yCoordinate ="colF",
-                                            doubleConstraintRandom=c("rowF","colF"), verbose=verbose)
-
-            factorsFitted <- unlist(lapply(mde$used$environmentF,length))
-            factorsFittedGreater <- which(factorsFitted > 0)
-
-            newRandom <- ifelse(length(factorsFittedGreater) > 0, TRUE, FALSE  )
-            if(newRandom){newRandom <- names(factorsFitted)[factorsFittedGreater]}else{newRandom<-NULL}
-            #
-            if((length(mde$used$environmentF$rowF) == 0) & (length(mde$used$environmentF$colF) == 0)){
+            newRandom <- if(length(screened$kept) > 0) screened$kept else NULL
+            
+            if(resid_screen$use_residual){
+              newSpline <- as.formula(
+                paste(
+                  "~spl2D(x1 = row, x2 = col, nseg = c(",
+                  min(c(round(nrow(gridCheck) / 2), 10)), ",",
+                  min(c(round(ncol(gridCheck) / 2), 10)),
+                  ") )"
+                )
+              )
+            } else {
               newSpline <- NULL
-            }else{
-              newSpline = as.formula(paste("~spl2D(x1 = row, x2 = col, nseg = c(",min(c(round(nrow(gridCheck)/2), 10)),",", min(c(round(ncol(gridCheck)/2), 10)),") )"))
             }
 
             for(iGenoUnit in genoUnitTraitField){ # iGenoUnit <- genoUnitTraitField[1]
@@ -248,7 +264,7 @@ staLMM <- function(
               ranran <- paste(c(myGeneticUnit, unique(intersect(randomTermForRanModel,newRandom)) ), collapse = " + ")
               randomFormulaForRanModel <- paste("~",ranran)
               # at least one condition met: replicated random terms, or replicated fixed terms
-              if( (length(factorsFittedGreater) > 0) | (median(table(mydataSub[,iGenoUnit]), na.rm=TRUE) > 1.5) ){
+              if((length(screened$kept) > 0)  | (median(table(mydataSub[,iGenoUnit]), na.rm=TRUE) > 1.5) ){
 
                 mixRandom <- try( # first model with genotypes as random
                   LMMsolver::LMMsolve(fixed =as.formula(fixedFormulaForRanModel),
