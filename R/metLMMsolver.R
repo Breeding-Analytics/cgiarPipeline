@@ -5,6 +5,7 @@ metLMMsolver <- function(
     useWeights=TRUE,estHybrids = TRUE,
     calculateSE=TRUE, heritLB= 0.15,  heritUB= 0.95,
     meanLB=0, meanUB=Inf, nPC=NULL,   # subsetVariable=NULL, subsetVariableLevels=NULL,
+    subsetGeno = -1, subsetPed = -1,
     maxIters=50,  verbose=TRUE
 ){
 
@@ -193,7 +194,7 @@ metLMMsolver <- function(
         #   missing <- apply(Markers,2,enhancer::propMissing)
         #   Markers <- apply(Markers[,which(missing < 0.9)],2,enhancer::imputev)
         # }
-        if(nPC["geno"] < 0){ # do not include extra individuals
+        if(subsetGeno < 0){ # do not include extra individuals
           mydataX <-  phenoDTfile$predictions[which( phenoDTfile$predictions$analysisId %in% analysisId),]
           if(!is_SCA_GCA & !is_GCA){
             Markers <- Markers[which(rownames(Markers) %in% unique(mydataX$designation) ), ]
@@ -368,7 +369,7 @@ metLMMsolver <- function(
                              damCol = paramsPed[paramsPed$parameter=="mother","value"],
                              sireCol = paramsPed[paramsPed$parameter=="father","value"]
         )
-        if(nPC["pedigree"] < 0){ # do not include extra individuals
+        if(subsetPed < 0){ # do not include extra individuals
           mydataX <-  phenoDTfile$predictions[which( phenoDTfile$predictions$analysisId %in% analysisId),]
           N <- N[which(rownames(N) %in% unique(mydataX$designation) ), which(rownames(N) %in% unique(mydataX$designation) ) ]
           if(verbose){message(paste("Subsetting pedigree to",nrow(N),"individuals present"))}
@@ -713,16 +714,24 @@ metLMMsolver <- function(
                     }
                     term_name <- randomTermProv2[irandom2]
                     
-                    # 1) Make the grouping a clean factor with only the levels that are present
-                    xf <- droplevels(factor(as.character(prov[[term_name]])))
+                    kernel_factor <- expCovariatesProv[[irandom]][irandom2]
                     
-                    # 2) Align the kernel rows to those (dropped) levels
-                    M  <- M[levels(xf), , drop = FALSE]
+                    keep_all <- ((kernel_factor == "genoA" && subsetGeno == 0) ||
+                                   (kernel_factor == "pedigree" && subsetPed == 0))
+                    
+                    if (keep_all) {
+                      xf <- factor(as.character(prov[[term_name]]), levels = rownames(M))
+                    } else {
+                      # 1) Make the grouping a clean factor with only the levels that are present
+                      xf <- droplevels(factor(as.character(prov[[term_name]])))
+                      # 2) Align the kernel rows to those (dropped) levels
+                      M  <- M[levels(xf), , drop = FALSE]
+                    }
                     
                     # 3) Normalize kernel
-                    is_kernel_factor <- expCovariatesProv[[irandom]][irandom2] %in%
+                    is_kernel_factor <- kernel_factor %in%
                       c("weather","geno","genoA","genoAD","genoD","pedigree") ||
-                      expCovariatesProv[[irandom]][irandom2] %in% traitsForExpCovariates
+                      kernel_factor %in% traitsForExpCovariates
                     
                     if (is_kernel_factor) {
                       M <- .scale_factor_mean_diag1(M)

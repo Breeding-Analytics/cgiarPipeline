@@ -1218,7 +1218,7 @@ metASREML <- function(phenoDTfile = NULL,
         environment = "across",
         parameter = c("Var_residual", "nEnv", "nEntries"),
         method = c("REML", "n", "n"),
-        value = c(Ve, length(goodFields), length(unique(
+        value = c(Ve, length(unique(mydataSub$environment)), length(unique(
           mydataSub$designation
         ))),
         stdError = c(NA, NA, NA)
