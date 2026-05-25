@@ -2,11 +2,22 @@ importFrom("grDevices", "dev.cur", "dev.new", "dev.next", "dev.set")
 importFrom("graphics", "axis", "lines", "par", "points", "title")
 importFrom("stats", "cov", "dist", "median", "model.matrix", "optimize", "pbeta", "ppoints", "predict", "smooth.spline","var")
 export(
-       traitTransformation,newOutliersFun, modifExpDesign, equalizeTraits,
+       traitTransformation, newOutliersFun, modifExpDesign, equalizeTraits,
        staLMM, metLMM, metLMMsolver, mtaLmmFlex, indexDesire, baseIndex, ocs, gpcp, rggMackay, rggPiepho, pgg,
        singleCrossMat, nasaPowerExtraction, summaryWeather, metASREML, funchunt, report_stats,
        numberFounders, individualVerification, markerAssistedSelection,
-       gwas,manhattanPlot,freeFunction, premetLMMsolver, postmetLMMsolver
-       )
+       gwas, manhattanPlot, freeFunction, premetLMMsolver, postmetLMMsolver,
+
+       # --- ProdAdv (pam_selection.R) ---
+       runInitialProdAdv,
+       savePlotProdAdvSelection,
+       build_prodadv_decision_table_data,
+       build_prodadv_review_plot_data,
+       idw_surface,
+       get_tpe_basemap,
+       sf_to_plotly_polygons,
+       build_tpe_mask,
+       buildProdAdvPerformanceProfile
+)
 
 

@@ -1030,6 +1030,49 @@ metLMMsolver <- function(
       fixedEffects <- setdiff(fixedEffects, "(Intercept)")
 
       for(iGroupFixed in fixedEffects){ # iGroupFixed = fixedEffects[1]
+        
+        fixed_vars <- unlist(strsplit(iGroupFixed, ":"))
+        
+        is_covariate <- all(fixed_vars %in% names(mydataSub)) &&
+          any(vapply(mydataSub[, fixed_vars, drop = FALSE], is.numeric, logical(1)))
+        
+        if (is_covariate) {
+          pick <- mix$ndxCoefficients[[iGroupFixed]]
+          pick <- pick[which(pick != 0)]
+          
+          beta <- as.numeric(mix$coefMME[pick])
+          
+          start <- sum(mix$EDdf[1:(which(mix$EDdf$Term == iGroupFixed) - 1), "Model"])
+          idx <- start:(start + length(pick) - 1L)
+          
+          nC <- nrow(mix$C)
+          E <- rhs_eye_spam(nC, idx)
+          X <- spam::solve(C_sp, E)
+          
+          if (is.null(dim(X))) {
+            dvals <- as.numeric(X[idx])
+          } else {
+            dvals <- vapply(seq_along(idx), function(j) {
+              as.numeric(X[idx[j], j])
+            }, numeric(1))
+          }
+          
+          stdError <- sqrt(pmax(dvals, 0))
+          
+          prov <- data.frame(
+            designation    = iGroupFixed,
+            predictedValue = beta,
+            stdError       = stdError,
+            reliability    = NA,
+            trait          = iTrait,
+            effectType     = iGroupFixed,
+            environment    = "(Intercept)",
+            entryType      = "unknown"
+          )
+          
+          pp[[iGroupFixed]] <- prov
+          next
+        }
 
         pick <- mix$ndxCoefficients[[iGroupFixed]]
         pick <- pick[which(pick!=0)]
