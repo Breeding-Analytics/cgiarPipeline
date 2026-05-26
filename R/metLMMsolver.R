@@ -492,6 +492,21 @@ metLMMsolver <- function(
       goodFieldsMean <- unique(pipeline_metricsSub[which((pipeline_metricsSub$value > meanLB[iTrait]) & (pipeline_metricsSub$value < meanUB[iTrait])),"environment"])
       prov <- prov[which(prov$environment %in% goodFieldsMean),]
       envCount[[iTrait]] <- unique(prov$environment)
+      
+      # Finlay-Wilkinson environmental index
+      # Computed per trait from STA adjusted values 
+      needs_envIndex <- "envIndex" %in% unique(c(
+        unlist(fixedTerm),
+        unlist(randomTerm)
+      ))
+      
+      if (needs_envIndex) {
+        prov$envIndex <- ave(
+          prov$predictedValue,
+          prov$environment,
+          FUN = function(x) mean(x, na.rm = TRUE) - mean(prov$predictedValue, na.rm = TRUE)
+        )
+      }
 
       #Add inbreeding coefficient to prov
       if ("genoD" %in% covars & (!"inbreeding" %in% colnames(prov))) {
@@ -510,7 +525,7 @@ metLMMsolver <- function(
       right_covars <- unique(unlist(expCovariates))  # e.g., "genoA","weather","pedigree","envIndex...", trait kernels, etc.
       
       # Numeric fixed terms you intend to stay numeric (add/remove as needed)
-      numeric_fixed_whitelist <- c("inbreeding", grep("^envIndex", colnames(prov), value = TRUE))
+      numeric_fixed_whitelist <- c("inbreeding", "envIndex")
       
       # Columns that MUST be treated as categorical (factor) if they appear in prov
       must_be_factor <- setdiff(unique(c(left_fixed_vars, left_random_vars)),
@@ -818,15 +833,17 @@ metLMMsolver <- function(
                                ncol(Macc), ncol(ff), paste(randomTermProv2, collapse=":")))
                 }
                 # compute environment column for later
-                namesForEnvs <- lapply(Mlist,function(x){rownames(x)})
-                namesForEnvs=do.call(expand.grid, rev(namesForEnvs))
-                if(ncol(namesForEnvs)==1){ # if there's no interactions
-                  envs <- rep("(Intercept)",nrow(M))
-                }else{ # if there's interactions
-                  nLevsInEnvs <- apply(namesForEnvs,2, function(x){length(unique(x))})
-                  # remove the one with the biggest number of levels
-                  namesForEnvs <- namesForEnvs[,-c(which(nLevsInEnvs == max(nLevsInEnvs))),drop=FALSE]
-                  envs <- apply(namesForEnvs,1,function(x){paste(x,collapse = ":")})
+                namesForEnvs <- lapply(Mlist, function(x) rownames(x))
+                namesForEnvs <- do.call(expand.grid, rev(namesForEnvs))
+                if (any(randomTermProv2 == "envIndex")) {
+                  # Finlay-Wilkinson:
+                  envs <- rep("(Intercept)", nrow(Macc))
+                } else if (ncol(namesForEnvs) == 1) {
+                  envs <- rep("(Intercept)", nrow(M))
+                } else {
+                  nLevsInEnvs <- apply(namesForEnvs, 2, function(x) length(unique(x)))
+                  namesForEnvs <- namesForEnvs[, -c(which(nLevsInEnvs == max(nLevsInEnvs))), drop = FALSE]
+                  envs <- apply(namesForEnvs, 1, function(x) paste(x, collapse = ":"))
                 }
                 xxList=NULL;Mlist=NULL
                 groupingTermProv[[irandom]] <- c( (ncol(prov)+1) : ( ncol(prov)+ncol(ff) ) ) # build grouping term
@@ -962,12 +979,40 @@ metLMMsolver <- function(
     if(!inherits(mix,"try-error") ){ 
       
       ## save the modeling used
-      currentModeling <- data.frame(module="mtaLmms", analysisId=mtaAnalysisId,trait=iTrait, environment=c(rep("across",3), names(unlist(entryTypesSub))),
-                                    parameter=c("fixedFormula","randomFormula","family",rep("kernels",length(unlist(entryTypesSub)))),
-                                    value=c(fix,ifelse(length(ranran)>0,ranran,NA),traitFamily[iTrait],unlist(entryTypesSub) ))
+      entryTypesFlat <- unlist(entryTypesSub, use.names = FALSE)
       
-      phenoDTfile$modeling <- rbind(phenoDTfile$modeling,currentModeling[,colnames(phenoDTfile$modeling)] )
+      kernelEnv <- names(entryTypesSub)
       
+      if (is.null(kernelEnv) || length(kernelEnv) != length(entryTypesFlat)) {
+        kernelEnv <- rep("across", length(entryTypesFlat))
+      }
+      
+      # FW/random-regression terms should not generate fake environment labels
+      kernelEnv[grepl("envIndex", kernelEnv)] <- "across"
+      
+      currentModeling <- data.frame(
+        module = "mtaLmms",
+        analysisId = mtaAnalysisId,
+        trait = iTrait,
+        environment = c(rep("across", 3), kernelEnv),
+        parameter = c(
+          "fixedFormula",
+          "randomFormula",
+          "family",
+          rep("kernels", length(entryTypesFlat))
+        ),
+        value = c(
+          fix,
+          ifelse(length(ranran) > 0, ranran, NA),
+          traitFamily[iTrait],
+          entryTypesFlat
+        )
+      )
+      
+      phenoDTfile$modeling <- rbind(
+        phenoDTfile$modeling,
+        currentModeling[, colnames(phenoDTfile$modeling)]
+      )
       
       ## save the environments used goodFields
       currentModeling <- data.frame(module="mtaLmms", analysisId=mtaAnalysisId,trait=iTrait, environment=allEnvironments,
@@ -1182,7 +1227,15 @@ metLMMsolver <- function(
                   X    <- spam::solve(C_sp, E)                        # solves C %*% X = E
                   # each needed diagonal element is X[cols[j], j]
                   k    <- length(cols)
-                  dvals[pos:(pos + k - 1L)] <- X[cbind(cols, seq_len(k))]
+                  diag_vals <- if (is.null(dim(X))) {
+                    as.numeric(X[cols])
+                  } else {
+                    vapply(seq_along(cols), function(j) {
+                      as.numeric(X[cols[j], j])
+                    }, numeric(1))
+                  }
+                  
+                  dvals[pos:(pos + k - 1L)] <- diag_vals
                   pos  <- pos + k
                 }
                 stdError    <- sqrt(pmax(dvals, 0))
@@ -1251,27 +1304,33 @@ metLMMsolver <- function(
             parts     <- strsplit(names(blup), ":", fixed = TRUE)
             term_vars <- unlist(randomTermSub[[iGroup]])
             
-            # which slots are designation
-            geno_vars <- c("designation", "designationA", "designationD",
-                           "gid", "mother", "father")
-            idx_env <- which(!(term_vars %in% geno_vars))
-            
-            if (length(idx_env) > 0L) {
-              envCol <- vapply(parts, function(p) {
-                if (length(p) < max(idx_env)) {
-                  NA_character_
-                } else {
-                  paste(p[idx_env], collapse = ":")
-                }
-              }, character(1L))
+            if ("envIndex" %in% term_vars) {
+              # FW slope term: 
+              envCol <- rep("(Intercept)", length(blup))
             } else {
-              envLevels <- envsSub[[iGroup]]
-              envCol <- vapply(parts, function(p) {
-                hit <- p[p %in% envLevels]
-                if (length(hit) == 1L)      hit
-                else if (length(hit) == 0L) NA_character_
-                else                        hit[1L]
-              }, character(1L))
+              parts <- strsplit(names(blup), ":", fixed = TRUE)
+              
+              geno_vars <- c("designation", "designationA", "designationD",
+                             "gid", "mother", "father")
+              idx_env <- which(!(term_vars %in% geno_vars))
+              
+              if (length(idx_env) > 0L) {
+                envCol <- vapply(parts, function(p) {
+                  if (length(p) < max(idx_env)) {
+                    NA_character_
+                  } else {
+                    paste(p[idx_env], collapse = ":")
+                  }
+                }, character(1L))
+              } else {
+                envLevels <- envsSub[[iGroup]]
+                envCol <- vapply(parts, function(p) {
+                  hit <- p[p %in% envLevels]
+                  if (length(hit) == 1L)      hit
+                  else if (length(hit) == 0L) NA_character_
+                  else                        hit[1L]
+                }, character(1L))
+              }
             }
           }
           
@@ -1279,6 +1338,7 @@ metLMMsolver <- function(
                              trait=iTrait, effectType=iGroup , environment=envCol)
           
           # add fixed effects if present in the random term
+          is_fw_term <- "envIndex" %in% unlist(randomTermSub[[iGroup]])
           feToAdd <- intersect(unlist(randomTermSub[[iGroup]]), fixedEffects)
           if (length(feToAdd) > 0) {
             # split the compound label (designation column here encodes the crossed levels)
@@ -1308,7 +1368,7 @@ metLMMsolver <- function(
               
               prov[,"predictedValue"] <- prov[,"predictedValue"] + mu0
             }
-          } else {
+          } else if (!is_fw_term) {
             prov[,"predictedValue"] <- prov[,"predictedValue"] + mu
           }
           
@@ -1362,12 +1422,73 @@ metLMMsolver <- function(
             return(x2)
           })
           prov$entryType <- cgiarBase::replaceValues(prov$entryType, Search = "", Replace = "unknown")
+          
+          if (is_fw_term) {
+            
+            ## Current prov is the raw slope. Do NOT add intercept/main effect.
+            prov_slope <- prov
+            
+            prov_slope$designation <- sub(":envIndex$", "", prov_slope$designation)
+            prov_slope$designation <- sub(":$", "", prov_slope$designation)
+            
+            prov_slope$effectType  <- "fw_slope"
+            prov_slope$environment <- "(Intercept)"
+            prov_slope$designation <- sub(":envIndex$", "", prov_slope$designation)
+            
+            pp[[iGroup]] <- prov_slope
+            
+            des_main <- pp[["designation"]]
+            
+            if (!is.null(des_main) && nrow(des_main) > 0) {
+              
+              des_main <- des_main[des_main$environment == "(Intercept)", ]
+              des_main <- des_main[!duplicated(des_main$designation), ]
+              rownames(des_main) <- des_main$designation
+              
+              fw_env <- unique(mydataSub[, c("environment", "envIndex")])
+              fw_env <- fw_env[!is.na(fw_env$envIndex), ]
+              
+              prov_fw <- prov_slope[rep(seq_len(nrow(prov_slope)), each = nrow(fw_env)), ]
+              fw_env_expanded <- fw_env[rep(seq_len(nrow(fw_env)), times = nrow(prov_slope)), ]
+              
+              slope_value <- prov_fw$predictedValue
+              slope_se    <- prov_fw$stdError
+              
+              main_value <- des_main[prov_fw$designation, "predictedValue"]
+              main_se    <- des_main[prov_fw$designation, "stdError"]
+              
+              prov_fw$predictedValue <- main_value + slope_value * fw_env_expanded$envIndex
+              prov_fw$stdError <- sqrt(main_se^2 + (fw_env_expanded$envIndex^2 * slope_se^2))
+              prov_fw$reliability <- NA
+              
+              prov_fw$designation <- paste0(
+                prov_fw$designation,
+                ":",
+                fw_env_expanded$environment
+              )
+              
+              prov_fw$effectType  <- "designation_environment"
+              prov_fw$environment <- fw_env_expanded$environment
+              
+              pp[[paste0(iGroup, "_fw_pred")]] <- prov_fw
+            }
+            
+            next
+          }
+          
+          
           # save
           pp[[iGroup]] <- prov
           
+          metricEnv <- paste(unique(prov$environment), collapse = "_")
+          
+          if ("envIndex" %in% unlist(randomTermSub[[iGroup]])) {
+            metricEnv <- paste(unique(mydataSub$environment), collapse = "_")
+          }
+          
           phenoDTfile$metrics <- rbind(phenoDTfile$metrics,
                                        data.frame(module="mtaLmms",analysisId=mtaAnalysisId, trait= iTrait,
-                                                  environment=paste(unique(envsSub[[iGroup]]), collapse = "_"),
+                                                  environment = metricEnv,
                                                   parameter=c( paste(c("mean","sd", "r2","Var","Var_PEVcorr"),iGroup,sep="_") ),
                                                   method=c("sum(x)/n","sd","(G-PEV)/G","REML","REML"),
                                                   value=c(mean(prov[,"predictedValue"], na.rm=TRUE), sdP, median(reliability), var(prov[,"predictedValue"], na.rm=TRUE), var_PEV),
