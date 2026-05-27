@@ -1439,40 +1439,6 @@ metLMMsolver <- function(
             
             des_main <- pp[["designation"]]
             
-            if (!is.null(des_main) && nrow(des_main) > 0) {
-              
-              des_main <- des_main[des_main$environment == "(Intercept)", ]
-              des_main <- des_main[!duplicated(des_main$designation), ]
-              rownames(des_main) <- des_main$designation
-              
-              fw_env <- unique(mydataSub[, c("environment", "envIndex")])
-              fw_env <- fw_env[!is.na(fw_env$envIndex), ]
-              
-              prov_fw <- prov_slope[rep(seq_len(nrow(prov_slope)), each = nrow(fw_env)), ]
-              fw_env_expanded <- fw_env[rep(seq_len(nrow(fw_env)), times = nrow(prov_slope)), ]
-              
-              slope_value <- prov_fw$predictedValue
-              slope_se    <- prov_fw$stdError
-              
-              main_value <- des_main[prov_fw$designation, "predictedValue"]
-              main_se    <- des_main[prov_fw$designation, "stdError"]
-              
-              prov_fw$predictedValue <- main_value + slope_value * fw_env_expanded$envIndex
-              prov_fw$stdError <- sqrt(main_se^2 + (fw_env_expanded$envIndex^2 * slope_se^2))
-              prov_fw$reliability <- NA
-              
-              prov_fw$designation <- paste0(
-                prov_fw$designation,
-                ":",
-                fw_env_expanded$environment
-              )
-              
-              prov_fw$effectType  <- "designation_environment"
-              prov_fw$environment <- fw_env_expanded$environment
-              
-              pp[[paste0(iGroup, "_fw_pred")]] <- prov_fw
-            }
-            
             next
           }
           
