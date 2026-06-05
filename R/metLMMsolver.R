@@ -1444,7 +1444,69 @@ metLMMsolver <- function(
           prov$entryType <- entry_lookup[entry_ids, "entryType"]
           prov$entryType[is.na(prov$entryType) | prov$entryType == ""] <- "unknown"
           
+          if (is_fw_term) {
+            ## Current prov is the raw slope. Do NOT add intercept/main effect.
+            prov_slope <- prov
+            prov_slope$designation <- sub(":envIndex$", "", prov_slope$designation)
+            prov_slope$designation <- sub(":$", "", prov_slope$designation)
+            prov_slope$effectType  <- "fw_slope"
+            prov_slope$environment <- "(Intercept)"
+            
+            pp[[iGroup]] <- prov_slope
+            des_main <- pp[["designation"]]
+            next
+          }
+          
+          # save
           pp[[iGroup]] <- prov
+          
+          ## PEV-corrected variance (Fernández-González & Isidro y Sánchez, 2025, Eq. 4)
+          var_PEV <- NA_real_
+          eps_vg  <- 1e-12
+          
+          if (!is.finite(Vg) || is.na(Vg) || Vg <= eps_vg) {
+            var_PEV <- 0
+          } else if (isTRUE(calculateSE) && length(blup) > 0L) {
+            ok <- which(!is.na(blup) & !is.na(stdError))
+            if (length(ok) > 0L) {
+              n_eff     <- length(ok)
+              var_hat   <- sum(blup[ok]^2) / n_eff
+              mean_pev  <- sum(stdError[ok]^2) / n_eff
+              var_u     <- var_hat + mean_pev
+              
+              mean_diagK <- 1
+              
+              if (!use_formula) {
+                Mu <- Msub[[iGroup]]
+                kii <- rowSums(as.matrix(Mu)^2)
+                mean_diagK <- mean(kii[ok], na.rm = TRUE)
+              }
+              
+              if (is.finite(mean_diagK) && mean_diagK > 0) {
+                var_PEV <- var_u / mean_diagK
+              } else {
+                var_PEV <- NA_real_
+              }
+            }
+          }
+          
+          # Write per-random-effect metrics
+          metricEnv <- paste(unique(prov$environment), collapse = "_")
+          
+          if ("envIndex" %in% unlist(randomTermSub[[iGroup]])) {
+            metricEnv <- paste(unique(mydataSub$environment), collapse = "_")
+          }
+          
+          phenoDTfile$metrics <- rbind(phenoDTfile$metrics,
+                                       data.frame(module="mtaLmms",analysisId=mtaAnalysisId, trait= iTrait,
+                                                  environment = metricEnv,
+                                                  parameter=c( paste(c("mean","sd", "r2","Var","Var_PEVcorr"),iGroup,sep="_") ),
+                                                  method=c("sum(x)/n","sd","(G-PEV)/G","REML","REML"),
+                                                  value=c(mean(prov[,"predictedValue"], na.rm=TRUE), sdP, median(reliability), var(prov[,"predictedValue"], na.rm=TRUE), var_PEV),
+                                                  stdError=c(NA,NA,sd(reliability, na.rm = TRUE)/sqrt(length(reliability)),NA,NA)
+                                       )
+          )
+          
         }
       }
     }else{ # if model failed
