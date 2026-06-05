@@ -14,6 +14,74 @@ coalesce_chr <- function(...) {
 }
 
 
+#' Check trait quality before running initial selection
+#'
+#' Returns a list of flagged traits with reasons. Called by UI to show
+#' confirmation dialog before proceeding.
+#' @export
+checkTraitQuality <- function(args, dt_object) {
+  
+  check_entry_type_value <- args$checkEntryTypeValue
+  if (is.null(check_entry_type_value) || !nzchar(check_entry_type_value)) {
+    check_entry_type_value <- NULL
+  }
+  
+  preds <- dt_object$predictions
+  mta_preds <- preds[preds$analysisId == args$mtaStamp & preds$effectType == "designation", ]
+  mta_preds <- mta_preds[mta_preds$trait %in% args$traitsToEvaluate, ]
+  
+  if (is.null(check_entry_type_value)) {
+    candidate_preds <- mta_preds
+  } else {
+    candidate_preds <- mta_preds[mta_preds$entryType != check_entry_type_value, ]
+  }
+  
+  reliability_threshold <- 0.20
+  reliability_pct_threshold <- 0.60
+  rsr_threshold <- 1.0
+  
+  flagged_traits <- character(0)
+  flag_reasons <- list()
+  
+  for (t in args$traitsToEvaluate) {
+    trait_cand <- candidate_preds[candidate_preds$trait == t, ]
+    reasons <- character(0)
+    
+    if ("reliability" %in% colnames(trait_cand)) {
+      trait_rel <- trait_cand$reliability[!is.na(trait_cand$reliability)]
+      if (length(trait_rel) > 0) {
+        pct_low <- mean(trait_rel < reliability_threshold)
+        if (pct_low > reliability_pct_threshold) {
+          reasons <- c(reasons, sprintf("low reliability (%.0f%% below %.2f)", pct_low * 100, reliability_threshold))
+        }
+      }
+    }
+    
+    if ("stdError" %in% colnames(trait_cand)) {
+      blups <- trait_cand$predictedValue[!is.na(trait_cand$predictedValue)]
+      ses <- trait_cand$stdError[!is.na(trait_cand$stdError)]
+      if (length(blups) > 2 && length(ses) > 0 && mean(ses) > 0) {
+        rsr <- sd(blups) / mean(ses)
+        if (rsr < rsr_threshold) {
+          reasons <- c(reasons, sprintf("ranking not separable (RSR=%.2f)", rsr))
+        }
+      }
+    }
+    
+    if (length(reasons) > 0) {
+      flagged_traits <- c(flagged_traits, t)
+      flag_reasons[[t]] <- paste(reasons, collapse = "; ")
+    }
+  }
+  
+  list(
+    flagged_traits = flagged_traits,
+    flag_reasons = flag_reasons,
+    has_issues = length(flagged_traits) > 0
+  )
+}
+
+
 runInitialProdAdv <- function(analysisId = as.numeric(Sys.time()),
                              analysisIdName,
                              args,
@@ -64,19 +132,16 @@ runInitialProdAdv <- function(analysisId = as.numeric(Sys.time()),
     ]
   }
 
-  # ---- Trait quality filtering ----
-  # Two filters applied:
-  # 1. Reliability filter: exclude traits where reliability < 0.20 for >60% of candidates
-  # 2. Ranking Separability Ratio (RSR): exclude traits where SD(BLUPs) / mean(SE) < 1.0
-  #    RSR < 1 means the standard errors are as large as the genetic differences — ranking is noise
+  # ---- Trait quality assessment ----
+  # Compute reliability and RSR metrics per trait (informational — no exclusion)
+  # Flagged traits are reported back to UI for user decision
   reliability_threshold <- 0.20
   reliability_pct_threshold <- 0.60
   rsr_threshold <- 1.0
-  excluded_traits <- character(0)
-  exclusion_reasons <- list()
-  traits_to_use <- args$traitsToEvaluate
+  flagged_traits <- character(0)
+  flag_reasons <- list()
 
-  # Identify candidates for filtering
+  # Identify candidates for quality check
   if (is.null(check_entry_type_value)) {
     candidate_preds <- mta_preds
   } else {
@@ -87,7 +152,7 @@ runInitialProdAdv <- function(analysisId = as.numeric(Sys.time()),
     trait_cand <- candidate_preds[candidate_preds$trait == t, ]
     reasons <- character(0)
 
-    # Filter 1: Reliability
+    # Check 1: Reliability
     if ("reliability" %in% colnames(trait_cand)) {
       trait_rel <- trait_cand$reliability[!is.na(trait_cand$reliability)]
       if (length(trait_rel) > 0) {
@@ -98,7 +163,7 @@ runInitialProdAdv <- function(analysisId = as.numeric(Sys.time()),
       }
     }
 
-    # Filter 2: Ranking Separability Ratio (RSR)
+    # Check 2: Ranking Separability Ratio (RSR)
     if ("stdError" %in% colnames(trait_cand)) {
       blups <- trait_cand$predictedValue[!is.na(trait_cand$predictedValue)]
       ses <- trait_cand$stdError[!is.na(trait_cand$stdError)]
@@ -111,14 +176,19 @@ runInitialProdAdv <- function(analysisId = as.numeric(Sys.time()),
     }
 
     if (length(reasons) > 0) {
-      excluded_traits <- c(excluded_traits, t)
-      exclusion_reasons[[t]] <- paste(reasons, collapse = "; ")
+      flagged_traits <- c(flagged_traits, t)
+      flag_reasons[[t]] <- paste(reasons, collapse = "; ")
     }
   }
 
-  traits_to_use <- setdiff(args$traitsToEvaluate, excluded_traits)
+  # Use only the traits the user chose to keep (after seeing the flags)
+  # args$traitsToUse is set by the UI: either all traits or with flagged ones removed
+  traits_to_use <- args$traitsToEvaluate
+  if (!is.null(args$excludeTraits) && length(args$excludeTraits) > 0) {
+    traits_to_use <- setdiff(traits_to_use, args$excludeTraits)
+  }
   if (length(traits_to_use) == 0) {
-    stop("All traits were excluded due to quality filters (low reliability and/or poor ranking separability). Cannot proceed with selection.")
+    stop("No traits remaining after exclusion. Cannot proceed with selection.")
   }
 
   # ---- Build prediction and reliability matrices ----
@@ -336,14 +406,28 @@ runInitialProdAdv <- function(analysisId = as.numeric(Sys.time()),
     modeling <- if (is.null(modeling)) trait_model else rbind(modeling, trait_model)
   }
 
-  # Record excluded traits in modeling table
-  if (length(excluded_traits) > 0) {
+  # Record flagged traits in modeling table (informational only, not excluded)
+  if (length(flagged_traits) > 0) {
+    flag_rows <- data.frame(
+      module = "Init_prodAdv",
+      analysisId = analysisId,
+      trait = flagged_traits,
+      environment = NA,
+      parameter = "flagged_low_quality",
+      value = sapply(flagged_traits, function(t) flag_reasons[[t]]),
+      stringsAsFactors = FALSE
+    )
+    modeling <- rbind(modeling, flag_rows)
+  }
+
+  # Record which traits were actually excluded by user choice
+  if (!is.null(args$excludeTraits) && length(args$excludeTraits) > 0) {
     excl_rows <- data.frame(
       module = "Init_prodAdv",
       analysisId = analysisId,
-      trait = excluded_traits,
+      trait = args$excludeTraits,
       environment = NA,
-      parameter = "excluded_low_reliability",
+      parameter = "user_excluded_trait",
       value = "TRUE",
       stringsAsFactors = FALSE
     )
@@ -368,9 +452,9 @@ runInitialProdAdv <- function(analysisId = as.numeric(Sys.time()),
   dt_object$modeling <- rbind(dt_object$modeling, modeling)
   dt_object$status <- rbind(dt_object$status, status)
 
-  # Attach excluded traits info as attribute for UI warning
-  attr(dt_object, "pam_excluded_traits") <- excluded_traits
-  attr(dt_object, "pam_exclusion_reasons") <- exclusion_reasons
+  # Attach flagged traits info as attribute for UI warning
+  attr(dt_object, "pam_flagged_traits") <- flagged_traits
+  attr(dt_object, "pam_flag_reasons") <- flag_reasons
 
   dt_object
 
@@ -531,8 +615,8 @@ build_prodadv_decision_table_data <- function(dt,
   selected_traits <- unique(modeling_init$trait)
   selected_traits <- selected_traits[!is.na(selected_traits) & nzchar(selected_traits)]
   
-  # Exclude traits marked as excluded_low_reliability
-  excluded_trait_rows <- modeling_init[modeling_init$parameter == "excluded_low_reliability", , drop = FALSE]
+  # Exclude traits marked as user_excluded_trait
+  excluded_trait_rows <- modeling_init[modeling_init$parameter == "user_excluded_trait", , drop = FALSE]
   if (nrow(excluded_trait_rows) > 0) {
     selected_traits <- setdiff(selected_traits, excluded_trait_rows$trait)
   }
@@ -1193,8 +1277,8 @@ build_prodadv_trait_decision_table <- function(preds, modeling_init, check_entry
   stopifnot(is.data.frame(modeling_init))
   stopifnot(all(c("designation", "trait", "predictedValue", "entryType") %in% colnames(preds)))
   
-  # Exclude traits marked as excluded_low_reliability
-  excl_traits <- modeling_init$trait[modeling_init$parameter == "excluded_low_reliability"]
+  # Exclude traits marked as user_excluded_trait
+  excl_traits <- modeling_init$trait[modeling_init$parameter == "user_excluded_trait"]
   modeling_filtered <- modeling_init[!modeling_init$trait %in% excl_traits, , drop = FALSE]
   
   rule_list <- get_prodadv_trait_rules(modeling_filtered)
