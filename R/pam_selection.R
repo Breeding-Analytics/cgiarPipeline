@@ -18,7 +18,7 @@ runInitialProdAdv <- function(analysisId = as.numeric(Sys.time()),
                              analysisIdName,
                              args,
                              dt_object){
-  
+
   check_entry_type_value <- args$checkEntryTypeValue
   if (is.null(check_entry_type_value) || !nzchar(check_entry_type_value)) {
     check_entry_type_value <- NULL
@@ -42,279 +42,259 @@ runInitialProdAdv <- function(analysisId = as.numeric(Sys.time()),
     ]
   }
 
+  # ---- Reliability filtering ----
+  # Exclude traits where reliability < 0.20 for >60% of candidates
+  reliability_threshold <- 0.20
+  reliability_pct_threshold <- 0.60
+  excluded_traits <- character(0)
+  traits_to_use <- args$traitsToEvaluate
 
-  mta_preds_matrix <- matrix(nrow = length(unique(mta_preds$designation)), ncol = length(args$traitsToEvaluate))
+  if ("reliability" %in% colnames(mta_preds)) {
+    candidate_preds <- mta_preds[
+      is.null(check_entry_type_value) | mta_preds$entryType != check_entry_type_value,
+    ]
+    for (t in args$traitsToEvaluate) {
+      trait_rel <- candidate_preds$reliability[candidate_preds$trait == t]
+      trait_rel <- trait_rel[!is.na(trait_rel)]
+      if (length(trait_rel) > 0) {
+        pct_low <- mean(trait_rel < reliability_threshold)
+        if (pct_low > reliability_pct_threshold) {
+          excluded_traits <- c(excluded_traits, t)
+        }
+      }
+    }
+    traits_to_use <- setdiff(args$traitsToEvaluate, excluded_traits)
+    if (length(traits_to_use) == 0) {
+      stop("All traits were excluded due to low reliability. Cannot proceed with selection.")
+    }
+  }
+
+  # Build prediction matrix for traits that passed reliability filter
+  mta_preds_matrix <- matrix(nrow = length(unique(mta_preds$designation)), ncol = length(traits_to_use))
   rownames(mta_preds_matrix) <- unique(mta_preds$designation)
-  colnames(mta_preds_matrix) <- args$traitsToEvaluate
+  colnames(mta_preds_matrix) <- traits_to_use
 
-  idx <- 1
-  for(t in args$traitsToEvaluate){
-    mta_preds_matrix[,idx] <- mta_preds[mta_preds$trait == t,"predictedValue"]
-    idx <- idx + 1
+  for (idx in seq_along(traits_to_use)) {
+    t <- traits_to_use[idx]
+    mta_preds_matrix[, idx] <- mta_preds[mta_preds$trait == t, "predictedValue"]
   }
 
-  #Get index weights (if applicable)
-  scaled_traits <- NULL
-
-  if(args$decisionLogic == "Weighted index"){
-
-    #Desired gains index selected
-    if(args$weightSource == "Use desired gains weights"){
-      if(is.null(args$indexStamp)){
-        stop("Desired gains were selected. Please run the selection index module and provide an index analysis stamp")
-      }else{
-       index_model <- dt_object$modeling
-       index_model <- index_model[index_model$analysisId == args$indexStamp,]
-
-       if(any(grepl("_scaled",index_model$trait))){
-         index_model$trait <- gsub("_scaled","",index_model$trait)
-         scaled_traits <- T
-       }else{
-         scaled_traits <- F
-       }
-
-       index_model <- index_model[index_model$trait %in% args$traitsToEvaluate & index_model$parameter == "weight",]
-       if (!all(args$traitsToEvaluate %in% index_model$trait)) {
-         stop("Some of the traits selected are not present in the desired-gains index. Weights could not be retrieved")
-       }
-
-       index_model <- index_model[match(args$traitsToEvaluate,index_model$trait),]
-       index_weights <- as.numeric(index_model$value)
-       names(index_weights) <- args$traitsToEvaluate
-
-       if(scaled_traits){
-         index_preds <- scale(mta_preds_matrix) %*% index_weights
-       }else{
-         index_preds <- mta_preds_matrix %*% index_weights
-       }
-
-      }
-    }
-
-    #Custom weights selected
-    if(args$weightSource == "Use custom weights"){
-      if(is.null(args$customWeights)){
-        stop("Custom weights needs to be provided")
-      }
-
-      index_preds <- mta_preds_matrix %*% args$customWeights
-
-    }
-
-    #Apply index selection according to top percentage selected
-    mta_preds_matrix <- cbind(mta_preds_matrix,index_preds)
-    colnames(mta_preds_matrix) <- c(args$traitsToEvaluate, "index")
-
-    mta_preds_long <- as.data.frame(mta_preds_matrix)
-    mta_preds_long$designation <- rownames(mta_preds_long)
-    mta_preds_long$entryType <- unique(mta_preds[,c("designation","entryType")])[,"entryType"]
-
-    n_selected <- sum(mta_preds_long$entryType != check_entry_type_value) * (args$topPctSelected / 100)
-    n_selected <- as.integer(n_selected)
-    n_selected <- max(c(1,n_selected))
-
-    index_selection <- order(mta_preds_long$index[mta_preds_long$entryType != check_entry_type_value], decreasing = TRUE)[1:n_selected]
-    index_selection <- mta_preds_long$designation[mta_preds_long$entryType != check_entry_type_value][index_selection]
-    mta_preds_long$index_decision = NA
-    if(length(index_selection) > 1){
-      mta_preds_long$index_decision[mta_preds_long$designation %in% index_selection] <- "SELECTED"
-      mta_preds_long$index_decision[!mta_preds_long$designation %in% index_selection] <- "NOT SELECTED"
-    }else if (length(index_selection) == 1) {
-      mta_preds_long$index_decision[mta_preds_long$designation == index_selection] <- "SELECTED"
-      mta_preds_long$index_decision[mta_preds_long$designation != index_selection] <- "NOT SELECTED"
-    }else{
-      mta_preds_long$index_decision <- "NOT SELECTED"
-    }
-    
-    if(!is.null(check_entry_type_value)){
-      mta_preds_long$index_decision[mta_preds_long$entryType == check_entry_type_value] <- "CHECK"
-    }
-   
+  # ---- Compute weighted index (always applied) ----
+  # Scale traits before applying weights for comparability
+  index_weights <- args$customWeights[traits_to_use]
+  if (is.null(index_weights) || length(index_weights) != length(traits_to_use)) {
+    # Default weights = 1 for all traits
+    index_weights <- rep(1, length(traits_to_use))
+    names(index_weights) <- traits_to_use
   }
 
-  if (!exists("mta_preds_long")) {
-  mta_preds_long <- as.data.frame(mta_preds_matrix)
-  mta_preds_long$designation <- rownames(mta_preds_long)
-  mta_preds_long$entryType <- unique(mta_preds[,c("designation","entryType")])[,"entryType"]
+  scaled_matrix <- scale(mta_preds_matrix)
+  index_preds <- scaled_matrix %*% index_weights
+
+  # Build result data frame
+  mta_preds_matrix_full <- cbind(mta_preds_matrix, index_preds)
+  colnames(mta_preds_matrix_full) <- c(traits_to_use, "index_value")
+
+  mta_preds_long <- as.data.frame(mta_preds_matrix_full)
+  mta_preds_long$designation <- rownames(mta_preds_matrix_full)
+  mta_preds_long$entryType <- unique(mta_preds[, c("designation", "entryType")])[, "entryType"]
+
+  # ---- Apply index selection (% or number) ----
+  n_candidates <- sum(mta_preds_long$entryType != check_entry_type_value)
+
+  if (!is.null(args$nSelected) && args$nSelected > 0) {
+    n_selected <- min(args$nSelected, n_candidates)
+  } else {
+    top_pct <- if (!is.null(args$topPctSelected)) args$topPctSelected else 20
+    n_selected <- as.integer(n_candidates * (top_pct / 100))
+  }
+  n_selected <- max(c(1, n_selected))
+
+  candidate_indices <- which(mta_preds_long$entryType != check_entry_type_value)
+  index_order <- order(mta_preds_long$index_value[candidate_indices], decreasing = TRUE)
+  selected_positions <- candidate_indices[index_order[1:n_selected]]
+  selected_designations <- mta_preds_long$designation[selected_positions]
+
+  mta_preds_long$index_selection <- "NOT SELECTED"
+  mta_preds_long$index_selection[mta_preds_long$designation %in% selected_designations] <- "SELECTED"
+  if (!is.null(check_entry_type_value)) {
+    mta_preds_long$index_selection[mta_preds_long$entryType == check_entry_type_value] <- "CHECK"
   }
 
+  # ---- Apply trait-specific thresholds ----
+  trait_decision <- matrix(nrow = nrow(mta_preds_long), ncol = length(traits_to_use))
+  colnames(trait_decision) <- paste0(traits_to_use, "_trait_decision")
 
-  #Apply trait-specific rules
-
-  trait_decision <- matrix(nrow = length(unique(mta_preds$designation)), ncol = length(args$traitsToEvaluate))
-  colnames(trait_decision) <- paste0(args$traitsToEvaluate,"_trait_decision")
-
-  for(t in args$traitsToEvaluate){
+  for (t in traits_to_use) {
     trait_rules <- args$traitRules[[t]]
-    trait_value <- mta_preds_long[,t]
+    trait_value <- mta_preds_long[, t]
 
-    if(trait_rules$ruleType == "Threshold"){
-      if(trait_rules$direction == "Higher is better"){
-        decision <- trait_value >= trait_rules$threshold
-      }else if(trait_rules$direction == "Lower is better"){
-        decision <- trait_value <= trait_rules$threshold
+    # Default: no threshold set (all pass)
+    if (is.null(trait_rules) || is.null(trait_rules$ruleType) || trait_rules$ruleType == "None") {
+      decision <- rep("SELECTED", length(trait_value))
+    } else if (trait_rules$ruleType == "Threshold") {
+      if (trait_rules$direction == "Higher is better") {
+        decision <- ifelse(trait_value >= trait_rules$threshold, "SELECTED", "NOT SELECTED")
+      } else {
+        decision <- ifelse(trait_value <= trait_rules$threshold, "SELECTED", "NOT SELECTED")
       }
-
-    }else if(trait_rules$ruleType == "Acceptable range"){
-      decision <- trait_value >= trait_rules$minValue & trait_value <= trait_rules$maxValue
-    }else if(trait_rules$ruleType == "% over check"){
+    } else if (trait_rules$ruleType == "Acceptable range") {
+      decision <- ifelse(trait_value >= trait_rules$minValue & trait_value <= trait_rules$maxValue,
+                         "SELECTED", "NOT SELECTED")
+    } else if (trait_rules$ruleType == "% over check") {
       if (is.null(check_entry_type_value)) {
-        stop("Checks are required when using a '% over check' trait rule.")
+        stop("Checks are required when using a '% over check' trait threshold.")
       }
-      check_value <- mean(trait_value[mta_preds_long$designation == trait_rules$referenceCheck])
-      if(trait_rules$direction == "Higher is better"){
-        if(trait_rules$threshold > 0){
-          decision <- trait_value >= (check_value + check_value*(trait_rules$threshold/100))
-        }else{
-          decision <- trait_value >= min(trait_value)
-        }
-
-      }else if(trait_rules$direction == "Lower is better"){
-        if(trait_rules$threshold > 0){
-          decision <- trait_value <= (check_value - check_value*(trait_rules$threshold/100))
-        }else{
-          decision <- trait_value <= max(trait_value)
-        }
+      check_value <- mean(trait_value[mta_preds_long$entryType == check_entry_type_value], na.rm = TRUE)
+      if (trait_rules$direction == "Higher is better") {
+        target <- check_value + check_value * (trait_rules$threshold / 100)
+        decision <- ifelse(trait_value >= target, "SELECTED", "NOT SELECTED")
+      } else {
+        target <- check_value - check_value * (trait_rules$threshold / 100)
+        decision <- ifelse(trait_value <= target, "SELECTED", "NOT SELECTED")
       }
-
-    }else if(trait_rules$ruleType == "% over mean"){
+    } else if (trait_rules$ruleType == "% over mean") {
       if (is.null(check_entry_type_value)) {
         mean_value <- mean(trait_value, na.rm = TRUE)
       } else {
-        mean_value <- mean(
-          trait_value[mta_preds_long$entryType != check_entry_type_value],
-          na.rm = TRUE
-        )
+        mean_value <- mean(trait_value[mta_preds_long$entryType != check_entry_type_value], na.rm = TRUE)
       }
-      if(trait_rules$direction == "Higher is better"){
-        decision <- trait_value >= (mean_value + mean_value*(trait_rules$threshold/100))
-      }else if(trait_rules$direction == "Lower is better"){
-        decision <- trait_value <= (mean_value - mean_value*(trait_rules$threshold/100))
+      if (trait_rules$direction == "Higher is better") {
+        target <- mean_value + mean_value * (trait_rules$threshold / 100)
+        decision <- ifelse(trait_value >= target, "SELECTED", "NOT SELECTED")
+      } else {
+        target <- mean_value - mean_value * (trait_rules$threshold / 100)
+        decision <- ifelse(trait_value <= target, "SELECTED", "NOT SELECTED")
       }
+    } else {
+      decision <- rep("SELECTED", length(trait_value))
     }
 
-    decision <- as.character(decision)
-    decision[decision == "TRUE"] <- "SELECTED"
-    decision[decision == "FALSE"] <- "NOT SELECTED"
-    if(!is.null(check_entry_type_value)){
+    if (!is.null(check_entry_type_value)) {
       decision[mta_preds_long$entryType == check_entry_type_value] <- "CHECK"
     }
-    
-    trait_decision[,paste0(t,"_trait_decision")] <- decision
+
+    trait_decision[, paste0(t, "_trait_decision")] <- decision
   }
 
-  mta_preds_long <- cbind(mta_preds_long,trait_decision)
+  mta_preds_long <- cbind(mta_preds_long, trait_decision)
 
-  #Apply trait decision rule
-  if(args$decisionLogic == "All traits must pass"){
-    decision_set <- mta_preds_long[,grep("trait_decision",colnames(mta_preds_long))]
-    initial_decision <- apply(decision_set, 1, function(x) ifelse(any(x == "NOT SELECTED"),"NOT SELECTED","SELECTED"))
-    
-    if(!is.null(check_entry_type_value)){
-      initial_decision[mta_preds_long$entryType == check_entry_type_value] <- "CHECK"
-    }
-    
-  }else if(args$decisionLogic == "At least N traits pass"){
-    decision_set <- mta_preds_long[,grep("trait_decision",colnames(mta_preds_long))]
-    count_selected <- apply(decision_set, 1, function(x) sum(x == "SELECTED"))
-    initial_decision <- ifelse(count_selected >= args$minTraitsPass, "SELECTED","NOT SELECTED")
-    if(!is.null(check_entry_type_value)){
-      initial_decision[mta_preds_long$entryType == check_entry_type_value] <- "CHECK"
-    }
-  }else if(args$decisionLogic == "Weighted index"){
-    decision_set <- mta_preds_long[,grep("_decision",colnames(mta_preds_long))]
-    initial_decision <- apply(decision_set, 1, function(x) ifelse(any(x == "NOT SELECTED"),"NOT SELECTED","SELECTED"))
-    if(!is.null(check_entry_type_value)){
-      initial_decision[mta_preds_long$entryType == check_entry_type_value] <- "CHECK"
-    }
-  }
+  # ---- Combine index + threshold decisions ----
+  # Final initial decision: must pass index selection AND all trait thresholds
+  decision_cols <- grep("_decision", colnames(mta_preds_long), value = TRUE)
+  decision_set <- mta_preds_long[, decision_cols, drop = FALSE]
+  initial_decision <- apply(decision_set, 1, function(x) {
+    if (any(x == "CHECK")) return("CHECK")
+    if (any(x == "NOT SELECTED")) return("NOT SELECTED")
+    return("SELECTED")
+  })
 
   mta_preds_long$initial_decision <- initial_decision
 
+  # ---- Create modifications table ----
+  modifications <- data.frame(
+    module = "Init_prodAdv",
+    analysisId = analysisId,
+    designation = mta_preds_long$designation,
+    reason = "initial_selection",
+    value = mta_preds_long$initial_decision,
+    stringsAsFactors = FALSE
+  )
 
-  #Create modifications table (new list: selection)
-  modifications <- data.frame(module = "Init_prodAdv",
-                             analysisId = analysisId,
-                             designation = mta_preds_long$designation,
-                             reason = "initial_selection",
-                             value = mta_preds_long$initial_decision)
+  # ---- Create modeling table ----
+  .null_or_name <- function(x, name) {
+    if (is.null(x)) NULL else name
+  }
 
-  #Create modeling table
-  for(t in args$traitsToEvaluate){
+  modeling <- NULL
+  for (t in traits_to_use) {
+    weight_value <- index_weights[t]
+    trait_rules_t <- args$traitRules[[t]]
 
-    weight_value <- NULL
-
-    if (identical(args$weightSource, "Use desired gains weights")) {
-      weight_value <- index_weights[t]
-    } else if (identical(args$weightSource, "Use custom weights")) {
-      weight_value <- if (is.null(args$customWeights)) NULL else args$customWeights[t]
-    }
-
-    arg_values <- c(args$mtaStamp,
-                   args$staStamp,
-                   args$decisionLogic,
-                   args$minTraitsPass,
-                   args$weightSource,
-                   args$topPctSelected,
-                   weight_value,
-                   scaled_traits,
-                   args$traitRules[[t]]$ruleType,
-                   args$traitRules[[t]]$direction,
-                   args$traitRules[[t]]$threshold,
-                   args$traitRules[[t]]$referenceCheck,
-                   args$traitRules[[t]]$minValue,
-                   args$traitRules[[t]]$maxValue)
-
-    .null_or_name <- function(x, name) {
-      if (is.null(x)) NULL else name
-    }
+    arg_values <- c(
+      args$mtaStamp,
+      args$staStamp,
+      "Weighted index",
+      as.character(args$topPctSelected),
+      as.character(args$nSelected),
+      as.character(weight_value),
+      "TRUE",
+      if (!is.null(trait_rules_t$ruleType)) trait_rules_t$ruleType else "None",
+      .null_or_name(trait_rules_t$direction, trait_rules_t$direction),
+      .null_or_name(trait_rules_t$threshold, as.character(trait_rules_t$threshold)),
+      .null_or_name(trait_rules_t$referenceCheck, trait_rules_t$referenceCheck),
+      .null_or_name(trait_rules_t$minValue, as.character(trait_rules_t$minValue)),
+      .null_or_name(trait_rules_t$maxValue, as.character(trait_rules_t$maxValue))
+    )
 
     arg_param <- c(
       "mta_stamp",
       "sta_stamp",
       "decision_logic",
-      .null_or_name(args$minTraitsPass, "min_traits_pass"),
-      .null_or_name(args$weightSource, "weight_source"),
-      .null_or_name(args$topPctSelected, "top_perc_selected"),
-      .null_or_name(weight_value, "index_weight"),
-      .null_or_name(scaled_traits, "scaled_traits"),
+      "top_perc_selected",
+      .null_or_name(args$nSelected, "n_selected"),
+      "index_weight",
+      "scaled_traits",
       "trait_rule_type",
-      .null_or_name(args$traitRules[[t]]$direction, "direction"),
-      .null_or_name(args$traitRules[[t]]$threshold, "threshold"),
-      .null_or_name(args$traitRules[[t]]$referenceCheck, "reference_check"),
-      .null_or_name(args$traitRules[[t]]$minValue, "min_value"),
-      .null_or_name(args$traitRules[[t]]$maxValue, "max_value")
+      .null_or_name(trait_rules_t$direction, "direction"),
+      .null_or_name(trait_rules_t$threshold, "threshold"),
+      .null_or_name(trait_rules_t$referenceCheck, "reference_check"),
+      .null_or_name(trait_rules_t$minValue, "min_value"),
+      .null_or_name(trait_rules_t$maxValue, "max_value")
     )
 
-    trait_model <- data.frame(module = "Init_prodAdv",
-                             analysisId = analysisId,
-                             trait = t,
-                             environment = NA,
-                             parameter = arg_param,
-                             value = arg_values)
+    # Remove NULLs (pairs must match)
+    keep <- !sapply(arg_param, is.null)
+    arg_param <- unlist(arg_param[keep])
+    arg_values <- unlist(arg_values[keep])
 
-    if(t == args$traitsToEvaluate[[1]]){
-      modeling <- trait_model
-    }else{
-      modeling <- rbind(modeling,trait_model)
-    }
+    trait_model <- data.frame(
+      module = "Init_prodAdv",
+      analysisId = analysisId,
+      trait = t,
+      environment = NA,
+      parameter = arg_param,
+      value = arg_values,
+      stringsAsFactors = FALSE
+    )
 
+    modeling <- if (is.null(modeling)) trait_model else rbind(modeling, trait_model)
   }
 
-  #Create status table
-  status <- data.frame(module = "Init_prodAdv",
-                      analysisId = analysisId,
-                      analysisIdName = analysisIdName)
+  # Record excluded traits in modeling table
+  if (length(excluded_traits) > 0) {
+    excl_rows <- data.frame(
+      module = "Init_prodAdv",
+      analysisId = analysisId,
+      trait = excluded_traits,
+      environment = NA,
+      parameter = "excluded_low_reliability",
+      value = "TRUE",
+      stringsAsFactors = FALSE
+    )
+    modeling <- rbind(modeling, excl_rows)
+  }
 
-  #Update data object
-  if(is.null(dt_object$modifications$selection)){
+  # ---- Create status table ----
+  status <- data.frame(
+    module = "Init_prodAdv",
+    analysisId = analysisId,
+    analysisIdName = analysisIdName,
+    stringsAsFactors = FALSE
+  )
+
+  # ---- Update data object ----
+  if (is.null(dt_object$modifications$selection)) {
     dt_object$modifications$selection <- modifications
-  }else{
-    dt_object$modifications$selection <- rbind(dt_object$modifications$selection,modifications)
+  } else {
+    dt_object$modifications$selection <- rbind(dt_object$modifications$selection, modifications)
   }
 
-  dt_object$modeling <- rbind(dt_object$modeling,modeling)
-  dt_object$status <- rbind(dt_object$status,status)
+  dt_object$modeling <- rbind(dt_object$modeling, modeling)
+  dt_object$status <- rbind(dt_object$status, status)
+
+  # Attach excluded traits info as attribute for UI warning
+  attr(dt_object, "pam_excluded_traits") <- excluded_traits
 
   dt_object
 
