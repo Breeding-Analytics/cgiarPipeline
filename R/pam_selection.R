@@ -42,54 +42,105 @@ runInitialProdAdv <- function(analysisId = as.numeric(Sys.time()),
     ]
   }
 
-  # ---- Reliability filtering ----
-  # Exclude traits where reliability < 0.20 for >60% of candidates
+  # ---- Trait quality filtering ----
+  # Two filters applied:
+  # 1. Reliability filter: exclude traits where reliability < 0.20 for >60% of candidates
+  # 2. Ranking Separability Ratio (RSR): exclude traits where SD(BLUPs) / mean(SE) < 1.0
+  #    RSR < 1 means the standard errors are as large as the genetic differences — ranking is noise
   reliability_threshold <- 0.20
   reliability_pct_threshold <- 0.60
+  rsr_threshold <- 1.0
   excluded_traits <- character(0)
+  exclusion_reasons <- list()
   traits_to_use <- args$traitsToEvaluate
 
-  if ("reliability" %in% colnames(mta_preds)) {
-    candidate_preds <- mta_preds[
-      is.null(check_entry_type_value) | mta_preds$entryType != check_entry_type_value,
-    ]
-    for (t in args$traitsToEvaluate) {
-      trait_rel <- candidate_preds$reliability[candidate_preds$trait == t]
-      trait_rel <- trait_rel[!is.na(trait_rel)]
+  # Identify candidates for filtering
+  if (is.null(check_entry_type_value)) {
+    candidate_preds <- mta_preds
+  } else {
+    candidate_preds <- mta_preds[mta_preds$entryType != check_entry_type_value, ]
+  }
+
+  for (t in args$traitsToEvaluate) {
+    trait_cand <- candidate_preds[candidate_preds$trait == t, ]
+    reasons <- character(0)
+
+    # Filter 1: Reliability
+    if ("reliability" %in% colnames(trait_cand)) {
+      trait_rel <- trait_cand$reliability[!is.na(trait_cand$reliability)]
       if (length(trait_rel) > 0) {
         pct_low <- mean(trait_rel < reliability_threshold)
         if (pct_low > reliability_pct_threshold) {
-          excluded_traits <- c(excluded_traits, t)
+          reasons <- c(reasons, sprintf("low reliability (%.0f%% of candidates below %.2f)", pct_low * 100, reliability_threshold))
         }
       }
     }
-    traits_to_use <- setdiff(args$traitsToEvaluate, excluded_traits)
-    if (length(traits_to_use) == 0) {
-      stop("All traits were excluded due to low reliability. Cannot proceed with selection.")
+
+    # Filter 2: Ranking Separability Ratio (RSR)
+    if ("stdError" %in% colnames(trait_cand)) {
+      blups <- trait_cand$predictedValue[!is.na(trait_cand$predictedValue)]
+      ses <- trait_cand$stdError[!is.na(trait_cand$stdError)]
+      if (length(blups) > 2 && length(ses) > 0 && mean(ses) > 0) {
+        rsr <- sd(blups) / mean(ses)
+        if (rsr < rsr_threshold) {
+          reasons <- c(reasons, sprintf("ranking not separable (RSR=%.2f, threshold=%.1f)", rsr, rsr_threshold))
+        }
+      }
+    }
+
+    if (length(reasons) > 0) {
+      excluded_traits <- c(excluded_traits, t)
+      exclusion_reasons[[t]] <- paste(reasons, collapse = "; ")
     }
   }
 
-  # Build prediction matrix for traits that passed reliability filter
-  mta_preds_matrix <- matrix(nrow = length(unique(mta_preds$designation)), ncol = length(traits_to_use))
-  rownames(mta_preds_matrix) <- unique(mta_preds$designation)
+  traits_to_use <- setdiff(args$traitsToEvaluate, excluded_traits)
+  if (length(traits_to_use) == 0) {
+    stop("All traits were excluded due to quality filters (low reliability and/or poor ranking separability). Cannot proceed with selection.")
+  }
+
+  # ---- Build prediction and reliability matrices ----
+  all_designations <- unique(mta_preds$designation)
+  n_des <- length(all_designations)
+
+  mta_preds_matrix <- matrix(nrow = n_des, ncol = length(traits_to_use))
+  rownames(mta_preds_matrix) <- all_designations
   colnames(mta_preds_matrix) <- traits_to_use
+
+  # Reliability matrix (per-individual, per-trait) for index weighting
+  rel_matrix <- matrix(1, nrow = n_des, ncol = length(traits_to_use))
+  rownames(rel_matrix) <- all_designations
+  colnames(rel_matrix) <- traits_to_use
 
   for (idx in seq_along(traits_to_use)) {
     t <- traits_to_use[idx]
-    mta_preds_matrix[, idx] <- mta_preds[mta_preds$trait == t, "predictedValue"]
+    trait_data <- mta_preds[mta_preds$trait == t, ]
+    mta_preds_matrix[, idx] <- trait_data$predictedValue[match(all_designations, trait_data$designation)]
+
+    # Populate reliability matrix if available
+    if ("reliability" %in% colnames(trait_data)) {
+      rel_vals <- trait_data$reliability[match(all_designations, trait_data$designation)]
+      rel_vals[is.na(rel_vals)] <- 0
+      # Clamp to [0, 1]
+      rel_vals <- pmax(0, pmin(1, rel_vals))
+      rel_matrix[, idx] <- rel_vals
+    }
   }
 
-  # ---- Compute weighted index (always applied) ----
-  # Scale traits before applying weights for comparability
+  # ---- Compute reliability-weighted selection index ----
+  # Strategy: scale traits, then weight each individual's scaled BLUP by sqrt(reliability)
+  # This penalizes poorly-estimated individuals: their contribution to the index is dampened
+  # sqrt is used rather than raw reliability to avoid being too aggressive (sqrt(0.5) ≈ 0.71)
   index_weights <- args$customWeights[traits_to_use]
   if (is.null(index_weights) || length(index_weights) != length(traits_to_use)) {
-    # Default weights = 1 for all traits
     index_weights <- rep(1, length(traits_to_use))
     names(index_weights) <- traits_to_use
   }
 
   scaled_matrix <- scale(mta_preds_matrix)
-  index_preds <- scaled_matrix %*% index_weights
+  # Apply reliability penalty: element-wise multiplication with sqrt(reliability)
+  reliability_penalized <- scaled_matrix * sqrt(rel_matrix)
+  index_preds <- reliability_penalized %*% index_weights
 
   # Build result data frame
   mta_preds_matrix_full <- cbind(mta_preds_matrix, index_preds)
@@ -295,6 +346,7 @@ runInitialProdAdv <- function(analysisId = as.numeric(Sys.time()),
 
   # Attach excluded traits info as attribute for UI warning
   attr(dt_object, "pam_excluded_traits") <- excluded_traits
+  attr(dt_object, "pam_exclusion_reasons") <- exclusion_reasons
 
   dt_object
 
