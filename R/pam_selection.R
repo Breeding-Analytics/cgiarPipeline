@@ -1079,6 +1079,19 @@ apply_prodadv_trait_rule <- function(trait_df, rule_def, check_entry_type_value 
   trait_value <- trait_df$predictedValue
   decision <- rep(NA_character_, nrow(trait_df))
   
+  # Handle NULL or "None" rule type — all pass
+  if (is.null(rule_def$ruleType) || identical(rule_def$ruleType, "None") || identical(rule_def$ruleType, "")) {
+    decision <- rep("SELECTED", nrow(trait_df))
+    if (!is.null(check_entry_type_value)) {
+      decision[trait_df$entryType == check_entry_type_value] <- "CHECK"
+    }
+    return(data.frame(
+      designation = trait_df$designation,
+      decision = decision,
+      stringsAsFactors = FALSE
+    ))
+  }
+  
   if (identical(rule_def$ruleType, "Threshold")) {
     if (identical(rule_def$direction, "Higher is better")) {
       decision <- ifelse(trait_value >= rule_def$threshold, "SELECTED", "NOT SELECTED")
@@ -1154,6 +1167,11 @@ apply_prodadv_trait_rule <- function(trait_df, rule_def, check_entry_type_value 
     }
   }
   
+  else if (is.null(rule_def$ruleType) || identical(rule_def$ruleType, "None") || identical(rule_def$ruleType, "")) {
+    # No threshold set — all candidates pass
+    decision <- rep("SELECTED", nrow(trait_df))
+  }
+  
   else {
     stop(paste("Unsupported rule type:", rule_def$ruleType))
   }
@@ -1175,7 +1193,11 @@ build_prodadv_trait_decision_table <- function(preds, modeling_init, check_entry
   stopifnot(is.data.frame(modeling_init))
   stopifnot(all(c("designation", "trait", "predictedValue", "entryType") %in% colnames(preds)))
   
-  rule_list <- get_prodadv_trait_rules(modeling_init)
+  # Exclude traits marked as excluded_low_reliability
+  excl_traits <- modeling_init$trait[modeling_init$parameter == "excluded_low_reliability"]
+  modeling_filtered <- modeling_init[!modeling_init$trait %in% excl_traits, , drop = FALSE]
+  
+  rule_list <- get_prodadv_trait_rules(modeling_filtered)
   selected_traits <- names(rule_list)
   
   decision_tables <- lapply(selected_traits, function(tr) {
