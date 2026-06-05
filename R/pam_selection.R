@@ -30,6 +30,28 @@ runInitialProdAdv <- function(analysisId = as.numeric(Sys.time()),
   mta_preds <- mta_preds[mta_preds$trait %in% args$traitsToEvaluate,]
   mta_preds <- mta_preds[order(mta_preds$designation), ]
 
+  # Deduplicate: keep one row per designation × trait (average if duplicated)
+  # This handles cases where MTA stores multiple predictions per designation
+  dup_key <- paste(mta_preds$designation, mta_preds$trait, sep = "|||")
+  if (any(duplicated(dup_key))) {
+    agg_cols <- c("predictedValue")
+    if ("reliability" %in% colnames(mta_preds)) agg_cols <- c(agg_cols, "reliability")
+    if ("stdError" %in% colnames(mta_preds)) agg_cols <- c(agg_cols, "stdError")
+    
+    # Keep first occurrence for non-numeric columns, average for numeric
+    mta_preds_dedup <- do.call(rbind, lapply(split(mta_preds, dup_key), function(x) {
+      row1 <- x[1, , drop = FALSE]
+      for (col in agg_cols) {
+        if (col %in% colnames(x)) {
+          row1[[col]] <- mean(x[[col]], na.rm = TRUE)
+        }
+      }
+      row1
+    }))
+    rownames(mta_preds_dedup) <- NULL
+    mta_preds <- mta_preds_dedup[order(mta_preds_dedup$designation), ]
+  }
+
   #Filter treatments according to pre-selection
   if (is.null(check_entry_type_value)) {
     mta_preds <- mta_preds[
@@ -148,7 +170,9 @@ runInitialProdAdv <- function(analysisId = as.numeric(Sys.time()),
 
   mta_preds_long <- as.data.frame(mta_preds_matrix_full)
   mta_preds_long$designation <- rownames(mta_preds_matrix_full)
-  mta_preds_long$entryType <- unique(mta_preds[, c("designation", "entryType")])[, "entryType"]
+  # Get entryType for each designation via match (handles duplicates safely)
+  entry_type_lookup <- mta_preds[!duplicated(mta_preds$designation), c("designation", "entryType"), drop = FALSE]
+  mta_preds_long$entryType <- entry_type_lookup$entryType[match(mta_preds_long$designation, entry_type_lookup$designation)]
 
   # ---- Apply index selection (% or number) ----
   n_candidates <- sum(mta_preds_long$entryType != check_entry_type_value)
@@ -507,6 +531,12 @@ build_prodadv_decision_table_data <- function(dt,
   selected_traits <- unique(modeling_init$trait)
   selected_traits <- selected_traits[!is.na(selected_traits) & nzchar(selected_traits)]
   
+  # Exclude traits marked as excluded_low_reliability
+  excluded_trait_rows <- modeling_init[modeling_init$parameter == "excluded_low_reliability", , drop = FALSE]
+  if (nrow(excluded_trait_rows) > 0) {
+    selected_traits <- setdiff(selected_traits, excluded_trait_rows$trait)
+  }
+  
   if (length(selected_traits) == 0) {
     stop("No selected traits found in Init_prodAdv modeling rows.")
   }
@@ -536,6 +566,24 @@ build_prodadv_decision_table_data <- function(dt,
   )
   
   names(pred_wide) <- sub("^predictedValue\\.", "", names(pred_wide))
+  
+  # Compute index_value from stored weights in modeling table
+  weight_rows <- modeling_init[modeling_init$parameter == "index_weight", , drop = FALSE]
+  if (nrow(weight_rows) > 0) {
+    index_weights <- as.numeric(weight_rows$value)
+    names(index_weights) <- weight_rows$trait
+    avail_traits <- intersect(names(index_weights), colnames(pred_wide))
+    if (length(avail_traits) > 0) {
+      trait_matrix <- as.matrix(pred_wide[, avail_traits, drop = FALSE])
+      scaled_matrix <- scale(trait_matrix)
+      w <- index_weights[avail_traits]
+      pred_wide$index_value <- as.numeric(scaled_matrix %*% w)
+    } else {
+      pred_wide$index_value <- NA_real_
+    }
+  } else {
+    pred_wide$index_value <- NA_real_
+  }
   
   init_sel <- dt$modifications$selection[
     dt$modifications$selection$analysisId %in% initial_stamp &
