@@ -696,7 +696,7 @@ build_prodadv_decision_table_data <- function(dt,
   
   names(pred_wide) <- sub("^predictedValue\\.", "", names(pred_wide))
   
-  # Compute index_value from stored weights in modeling table
+  # Compute index_value from stored weights in modeling table (with reliability weighting)
   weight_rows <- modeling_init[modeling_init$parameter == "index_weight", , drop = FALSE]
   if (nrow(weight_rows) > 0) {
     index_weights <- as.numeric(weight_rows$value)
@@ -706,7 +706,28 @@ build_prodadv_decision_table_data <- function(dt,
       trait_matrix <- as.matrix(pred_wide[, avail_traits, drop = FALSE])
       scaled_matrix <- scale(trait_matrix)
       w <- index_weights[avail_traits]
-      pred_wide$index_value <- as.numeric(scaled_matrix %*% w)
+      
+      # Apply reliability weighting (same as runInitialProdAdv)
+      rel_wide <- NULL
+      if ("reliability" %in% colnames(preds)) {
+        rel_data <- reshape(
+          preds[, c("designation", "trait", "reliability"), drop = FALSE],
+          idvar = "designation", timevar = "trait", direction = "wide"
+        )
+        names(rel_data) <- sub("^reliability\\.", "", names(rel_data))
+        rel_avail <- intersect(avail_traits, colnames(rel_data))
+        if (length(rel_avail) == length(avail_traits)) {
+          rel_matrix <- as.matrix(rel_data[match(pred_wide$designation, rel_data$designation), avail_traits, drop = FALSE])
+          rel_matrix[is.na(rel_matrix)] <- 0
+          rel_matrix <- pmax(0, pmin(1, rel_matrix))
+          reliability_penalized <- scaled_matrix * sqrt(rel_matrix)
+          pred_wide$index_value <- as.numeric(reliability_penalized %*% w)
+        } else {
+          pred_wide$index_value <- as.numeric(scaled_matrix %*% w)
+        }
+      } else {
+        pred_wide$index_value <- as.numeric(scaled_matrix %*% w)
+      }
     } else {
       pred_wide$index_value <- NA_real_
     }
