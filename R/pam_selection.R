@@ -30,6 +30,33 @@ checkTraitQuality <- function(args, dt_object) {
   mta_preds <- preds[preds$analysisId == args$mtaStamp & preds$effectType == "designation", ]
   mta_preds <- mta_preds[mta_preds$trait %in% args$traitsToEvaluate, ]
   
+  # Deduplicate (same as runInitialProdAdv)
+  dup_key <- paste(mta_preds$designation, mta_preds$trait, sep = "|||")
+  if (any(duplicated(dup_key))) {
+    agg_cols <- c("predictedValue")
+    if ("reliability" %in% colnames(mta_preds)) agg_cols <- c(agg_cols, "reliability")
+    if ("stdError" %in% colnames(mta_preds)) agg_cols <- c(agg_cols, "stdError")
+    mta_preds <- do.call(rbind, lapply(split(mta_preds, dup_key), function(x) {
+      row1 <- x[1, , drop = FALSE]
+      for (col in agg_cols) {
+        if (col %in% colnames(x)) row1[[col]] <- mean(x[[col]], na.rm = TRUE)
+      }
+      row1
+    }))
+    rownames(mta_preds) <- NULL
+  }
+  
+  # Filter to candidates only (same as runInitialProdAdv)
+  if (!is.null(args$selectedCandidates)) {
+    if (is.null(check_entry_type_value)) {
+      mta_preds <- mta_preds[mta_preds$designation %in% args$selectedCandidates, ]
+    } else {
+      mta_preds <- mta_preds[
+        mta_preds$designation %in% args$selectedCandidates |
+          mta_preds$entryType == check_entry_type_value, ]
+    }
+  }
+  
   if (is.null(check_entry_type_value)) {
     candidate_preds <- mta_preds
   } else {
