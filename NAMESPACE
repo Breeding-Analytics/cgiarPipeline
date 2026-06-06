@@ -10,6 +10,7 @@ export(
 
        # --- ProdAdv (pam_selection.R) ---
        runInitialProdAdv,
+       checkTraitQuality,
        savePlotProdAdvSelection,
        build_prodadv_decision_table_data,
        build_prodadv_review_plot_data,
