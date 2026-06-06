@@ -272,7 +272,20 @@ runInitialProdAdv <- function(analysisId = as.numeric(Sys.time()),
   mta_preds_long$entryType <- entry_type_lookup$entryType[match(mta_preds_long$designation, entry_type_lookup$designation)]
 
   # ---- Apply index selection (% or number) ----
-  n_candidates <- sum(mta_preds_long$entryType != check_entry_type_value)
+  if (is.null(check_entry_type_value)) {
+    n_candidates <- nrow(mta_preds_long)
+    candidate_indices <- seq_len(nrow(mta_preds_long))
+  } else {
+    # Case-insensitive comparison for entryType
+    candidate_indices <- which(toupper(trimws(mta_preds_long$entryType)) != toupper(trimws(check_entry_type_value)))
+    n_candidates <- length(candidate_indices)
+  }
+
+  if (n_candidates == 0) {
+    # Fallback: treat all as candidates if no match found
+    n_candidates <- nrow(mta_preds_long)
+    candidate_indices <- seq_len(nrow(mta_preds_long))
+  }
 
   if (!is.null(args$nSelected) && args$nSelected > 0) {
     n_selected <- min(args$nSelected, n_candidates)
@@ -281,16 +294,20 @@ runInitialProdAdv <- function(analysisId = as.numeric(Sys.time()),
     n_selected <- as.integer(n_candidates * (top_pct / 100))
   }
   n_selected <- max(c(1, n_selected))
+  
+  message(sprintf("[PAM] n_candidates=%d, n_selected=%d, topPct=%s, nSelected_arg=%s, check_entry_type='%s'",
+                  n_candidates, n_selected, 
+                  as.character(args$topPctSelected), as.character(args$nSelected),
+                  as.character(check_entry_type_value)))
 
-  candidate_indices <- which(mta_preds_long$entryType != check_entry_type_value)
   index_order <- order(mta_preds_long$index_value[candidate_indices], decreasing = TRUE)
   selected_positions <- candidate_indices[index_order[1:n_selected]]
   selected_designations <- mta_preds_long$designation[selected_positions]
 
-  mta_preds_long$index_selection <- "NOT SELECTED"
-  mta_preds_long$index_selection[mta_preds_long$designation %in% selected_designations] <- "SELECTED"
+  mta_preds_long$index_decision <- "NOT SELECTED"
+  mta_preds_long$index_decision[mta_preds_long$designation %in% selected_designations] <- "SELECTED"
   if (!is.null(check_entry_type_value)) {
-    mta_preds_long$index_selection[mta_preds_long$entryType == check_entry_type_value] <- "CHECK"
+    mta_preds_long$index_decision[toupper(trimws(mta_preds_long$entryType)) == toupper(trimws(check_entry_type_value))] <- "CHECK"
   }
 
   # ---- Apply trait-specific thresholds ----
@@ -343,7 +360,7 @@ runInitialProdAdv <- function(analysisId = as.numeric(Sys.time()),
     }
 
     if (!is.null(check_entry_type_value)) {
-      decision[mta_preds_long$entryType == check_entry_type_value] <- "CHECK"
+      decision[toupper(trimws(mta_preds_long$entryType)) == toupper(trimws(check_entry_type_value))] <- "CHECK"
     }
 
     trait_decision[, paste0(t, "_trait_decision")] <- decision
@@ -433,20 +450,6 @@ runInitialProdAdv <- function(analysisId = as.numeric(Sys.time()),
     modeling <- if (is.null(modeling)) trait_model else rbind(modeling, trait_model)
   }
 
-  # Record flagged traits in modeling table (informational only, not excluded)
-  if (length(flagged_traits) > 0) {
-    flag_rows <- data.frame(
-      module = "Init_prodAdv",
-      analysisId = analysisId,
-      trait = flagged_traits,
-      environment = NA,
-      parameter = "flagged_low_quality",
-      value = sapply(flagged_traits, function(t) flag_reasons[[t]]),
-      stringsAsFactors = FALSE
-    )
-    modeling <- rbind(modeling, flag_rows)
-  }
-
   # Record which traits were actually excluded by user choice
   if (!is.null(args$excludeTraits) && length(args$excludeTraits) > 0) {
     excl_rows <- data.frame(
@@ -459,6 +462,21 @@ runInitialProdAdv <- function(analysisId = as.numeric(Sys.time()),
       stringsAsFactors = FALSE
     )
     modeling <- rbind(modeling, excl_rows)
+  }
+
+  # Record flagged traits that were KEPT (not excluded) — informational only
+  kept_flagged <- setdiff(flagged_traits, if (!is.null(args$excludeTraits)) args$excludeTraits else character(0))
+  if (length(kept_flagged) > 0) {
+    flag_rows <- data.frame(
+      module = "Init_prodAdv",
+      analysisId = analysisId,
+      trait = kept_flagged,
+      environment = NA,
+      parameter = "flagged_low_quality",
+      value = sapply(kept_flagged, function(t) flag_reasons[[t]]),
+      stringsAsFactors = FALSE
+    )
+    modeling <- rbind(modeling, flag_rows)
   }
 
   # ---- Create status table ----
@@ -849,8 +867,12 @@ build_prodadv_decision_table_data <- function(dt,
     base_df$initial_decision
   )
   
-  base_df$is_check_sort <- ifelse(base_df$initial_decision == "CHECK", 0, 1)
-  base_df <- base_df[order(base_df$is_check_sort, base_df$designation), , drop = FALSE]
+  # Sort by index_value descending (checks participate in ordering)
+  if ("index_value" %in% colnames(base_df)) {
+    base_df <- base_df[order(-as.numeric(base_df$index_value)), , drop = FALSE]
+  } else {
+    base_df <- base_df[order(base_df$designation), , drop = FALSE]
+  }
   
   base_df
 }
