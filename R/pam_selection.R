@@ -697,7 +697,28 @@ build_prodadv_decision_table_data <- function(dt,
   names(pred_wide) <- sub("^predictedValue\\.", "", names(pred_wide))
   
   # Compute index_value from stored weights in modeling table (with reliability weighting)
+  # IMPORTANT: only use designations in the initial selection for scaling (same population as runInitialProdAdv)
   weight_rows <- modeling_init[modeling_init$parameter == "index_weight", , drop = FALSE]
+  
+  init_sel <- dt$modifications$selection[
+    dt$modifications$selection$analysisId %in% initial_stamp &
+      dt$modifications$selection$module == "Init_prodAdv" &
+      dt$modifications$selection$reason == "initial_selection",
+    ,
+    drop = FALSE
+  ]
+  
+  if (nrow(init_sel) == 0) {
+    stop("No initial selection rows found for the selected initial stamp.")
+  }
+  
+  init_sel <- unique(init_sel[, c("designation", "value"), drop = FALSE])
+  names(init_sel)[names(init_sel) == "value"] <- "initial_decision"
+  review_designations <- unique(init_sel$designation)
+  
+  # Filter pred_wide to only review designations BEFORE computing index
+  pred_wide <- pred_wide[pred_wide$designation %in% review_designations, , drop = FALSE]
+  
   if (nrow(weight_rows) > 0) {
     index_weights <- as.numeric(weight_rows$value)
     names(index_weights) <- weight_rows$trait
@@ -708,10 +729,10 @@ build_prodadv_decision_table_data <- function(dt,
       w <- index_weights[avail_traits]
       
       # Apply reliability weighting (same as runInitialProdAdv)
-      rel_wide <- NULL
       if ("reliability" %in% colnames(preds)) {
+        preds_review <- preds[preds$designation %in% review_designations, , drop = FALSE]
         rel_data <- reshape(
-          preds[, c("designation", "trait", "reliability"), drop = FALSE],
+          preds_review[, c("designation", "trait", "reliability"), drop = FALSE],
           idvar = "designation", timevar = "trait", direction = "wide"
         )
         names(rel_data) <- sub("^reliability\\.", "", names(rel_data))
@@ -735,22 +756,7 @@ build_prodadv_decision_table_data <- function(dt,
     pred_wide$index_value <- NA_real_
   }
   
-  init_sel <- dt$modifications$selection[
-    dt$modifications$selection$analysisId %in% initial_stamp &
-      dt$modifications$selection$module == "Init_prodAdv" &
-      dt$modifications$selection$reason == "initial_selection",
-    ,
-    drop = FALSE
-  ]
-  
-  if (nrow(init_sel) == 0) {
-    stop("No initial selection rows found for the selected initial stamp.")
-  }
-  
-  init_sel <- unique(init_sel[, c("designation", "value"), drop = FALSE])
-  names(init_sel)[names(init_sel) == "value"] <- "initial_decision"
-  review_designations <- unique(init_sel$designation)
-  
+  # Filter preds to review designations (init_sel and review_designations already defined above)
   preds <- preds[
     preds$designation %in% review_designations,
     ,
