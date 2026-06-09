@@ -1838,6 +1838,156 @@ buildProdAdvPerformanceProfile <- function(
 }
 
 
+#' Detect the relatedness visualization mode based on available data
+#'
+#' Determines which visualization mode to use for the relatedness plot by
+#' checking for the presence of pedigree and genomic data in a phenoDTfile object.
+#'
+#' @param phenoDTfile A list representing the phenotypic data object, expected to
+#'   contain \code{$data$pedigree}, \code{$metadata$pedigree}, and
+#'   \code{$data$geno_imp}.
+#'
+#' @return A list with the following elements:
+#' \describe{
+#'   \item{mode}{Character string: one of \code{"pedigree-only"},
+#'     \code{"pedigree-genomic"}, \code{"genomic-only"}, or \code{"none"}.}
+#'   \item{has_pedigree}{Logical indicating whether valid pedigree data is available.}
+#'   \item{has_genomic}{Logical indicating whether genomic data is available.}
+#'   \item{message}{Character string with a validation message when mode is
+#'     \code{"none"}, or \code{NULL} otherwise.}
+#' }
+#'
+#' @export
+detect_relatedness_mode <- function(phenoDTfile) {
+  # Check pedigree availability:
+  # Pedigree data must be non-null AND metadata$pedigree must have >= 3 mapped columns
+  has_pedigree <- FALSE
+  if (!is.null(phenoDTfile$data$pedigree)) {
+    ped_meta <- phenoDTfile$metadata$pedigree
+    if (!is.null(ped_meta) && is.data.frame(ped_meta)) {
+      # Count rows with non-NA, non-empty "value" entries
+      mapped_cols <- ped_meta$value[!is.na(ped_meta$value) & nzchar(trimws(ped_meta$value))]
+      if (length(mapped_cols) >= 3) {
+        has_pedigree <- TRUE
+      }
+    }
+  }
+
+  # Check genomic availability:
+  # geno_imp must have at least one entry (length >= 1)
+  has_genomic <- FALSE
+  if (!is.null(phenoDTfile$data$geno_imp)) {
+    if (length(phenoDTfile$data$geno_imp) >= 1) {
+      has_genomic <- TRUE
+    }
+  }
+
+  # Determine mode
+  if (has_pedigree && has_genomic) {
+    mode <- "pedigree-genomic"
+  } else if (has_pedigree && !has_genomic) {
+    mode <- "pedigree-only"
+  } else if (!has_pedigree && has_genomic) {
+    mode <- "genomic-only"
+  } else {
+    mode <- "none"
+  }
+
+  # Build message for "none" mode
+  msg <- NULL
+  if (mode == "none") {
+    msg <- "Relatedness plot requires pedigree or genotypic information. Please upload pedigree or marker data in the Data Retrieval section."
+  }
+
+  list(
+    mode = mode,
+    has_pedigree = has_pedigree,
+    has_genomic = has_genomic,
+    message = msg
+  )
+}
+
+
+#' Assign individuals to families based on pedigree cross information
+#'
+#' Each individual is assigned a family label derived from the unique combination
+#' of its mother and father. Individuals with both parents missing are placed in
+#' "Founders / Unknown Family". Individuals with one parent missing use
+#' "KnownParent \u00d7 Unknown".
+#'
+#' @param pedigree_df A data.frame containing pedigree records.
+#' @param designation_col Character string naming the column with individual identifiers.
+#' @param mother_col Character string naming the column with mother identifiers.
+#' @param father_col Character string naming the column with father identifiers.
+#'
+#' @return A named character vector mapping each designation to its family label.
+#'
+#' @export
+assign_families <- function(pedigree_df, designation_col, mother_col, father_col) {
+  designations <- as.character(pedigree_df[[designation_col]])
+  mothers <- as.character(pedigree_df[[mother_col]])
+  fathers <- as.character(pedigree_df[[father_col]])
+
+  # Treat NA and empty string as missing
+  mother_missing <- is.na(mothers) | mothers == ""
+  father_missing <- is.na(fathers) | fathers == ""
+
+  family_labels <- character(length(designations))
+
+  for (i in seq_along(designations)) {
+    m_miss <- mother_missing[i]
+    f_miss <- father_missing[i]
+
+    if (m_miss && f_miss) {
+      family_labels[i] <- "Founders / Unknown Family"
+    } else if (m_miss) {
+      family_labels[i] <- paste0(fathers[i], " \u00d7 Unknown")
+    } else if (f_miss) {
+      family_labels[i] <- paste0(mothers[i], " \u00d7 Unknown")
+    } else {
+      family_labels[i] <- paste0(mothers[i], " \u00d7 ", fathers[i])
+    }
+  }
+
+  names(family_labels) <- designations
+  family_labels
+}
+
+
+#' Build HTML tooltip for the relatedness plot
+#'
+#' Constructs an HTML tooltip string for a single individual in the
+#' relatedness plot hover display.
+#'
+#' @param designation Character scalar — individual identifier.
+#' @param family_or_cluster Character scalar — family or cluster label.
+#' @param plot_status Character scalar — current plot status (e.g. "SELECTED").
+#' @param index_value Numeric scalar — Selection Index value (may be NA).
+#' @param avg_relatedness Numeric scalar — average relatedness (may be NA).
+#' @param is_diversity_candidate Logical scalar — whether this is a diversity candidate.
+#'
+#' @return A character string containing the HTML tooltip.
+#'
+#' @export
+build_relatedness_tooltip <- function(designation, family_or_cluster, plot_status,
+                                      index_value, avg_relatedness, is_diversity_candidate) {
+  index_str <- if (is.na(index_value)) "N/A" else sprintf("%.2f", index_value)
+  rel_str <- if (is.na(avg_relatedness)) "N/A" else sprintf("%.3f", avg_relatedness)
+
+  tooltip <- paste0(
+    "<b>", designation, "</b><br>",
+    "Family/Cluster: ", family_or_cluster, "<br>",
+    "Status: ", plot_status, "<br>",
+    "Selection Index: ", index_str, "<br>",
+    "Avg. Relatedness: ", rel_str
+  )
+
+  if (isTRUE(is_diversity_candidate)) {
+    tooltip <- paste0(tooltip, "<br>\u2605 Diversity candidate")
+  }
+
+  tooltip
+}
 
 
 
@@ -1850,3 +2000,443 @@ buildProdAdvPerformanceProfile <- function(
 
 
 
+
+
+
+#' Compute summary bar text for the relatedness plot
+#'
+#' Returns a formatted character string summarizing the selected count, number of
+#' groups (families or clusters), number of diversity candidates identified, and
+#' the data mode label.
+#'
+#' @param selected_count Integer scalar — number of selected individuals.
+#' @param group_count Integer scalar — number of families or clusters.
+#' @param diversity_count Integer scalar — number of diversity candidates identified.
+#' @param mode_string Character scalar — the operating mode label
+#'   (e.g. "pedigree-only", "pedigree-genomic", "genomic-only").
+#'
+#' @return A formatted character string for the summary bar display.
+#' @export
+compute_summary_bar <- function(selected_count, group_count, diversity_count, mode_string) {
+  group_label <- if (grepl("genomic-only", mode_string, fixed = TRUE)) {
+    "clusters"
+  } else {
+    "families"
+  }
+
+  paste0(
+    selected_count, " selected | ",
+    group_count, " ", group_label, " | ",
+    diversity_count, " diversity candidates | ",
+    mode_string, " mode"
+  )
+}
+
+#' Normalize trait values by direction so higher is always better
+#'
+#' For traits where the breeding goal is to increase the value, the original
+#' values are returned unchanged. For traits where the goal is to decrease,
+#' the values are negated so that higher normalized values still represent
+#' better performance.
+#'
+#' @param values Numeric vector of trait values.
+#' @param direction Character, either "increase" or "decrease".
+#'
+#' @return Numeric vector of the same length as \code{values}. Unchanged when
+#'   \code{direction} is "increase"; negated when \code{direction} is "decrease".
+#'
+#' @export
+normalize_trait_direction <- function(values, direction) {
+  if (direction == "decrease") {
+    return(-values)
+  }
+  values
+}
+
+#' Compute Genomic Relationship Matrix (GRM) from a genlight object
+#'
+#' Extracts the marker dosage matrix from a genlight object, column-mean centers
+#' it, and computes the realized genomic relationship matrix as
+#' \code{tcrossprod(M_centered) / ncol(M_centered)}.
+#'
+#' @param genlight_obj A genlight object (from the adegenet package) containing
+#'   marker dosage data for a set of individuals.
+#'
+#' @return A symmetric numeric matrix of dimension n x n (where n is the number
+#'   of individuals in the genlight object). Row and column names correspond to
+#'   the individual names from the genlight object.
+#'
+#' @export
+compute_grm <- function(genlight_obj) {
+  # Extract marker dosage matrix; missing values replaced by column means
+
+  M <- adegenet::tab(genlight_obj, NA.method = "mean")
+
+  # Column-mean center the marker matrix
+  col_means <- colMeans(M, na.rm = TRUE)
+  M_centered <- sweep(M, 2, col_means, "-")
+
+  # Compute GRM = M_centered %*% t(M_centered) / p, where p = number of markers
+  GRM <- tcrossprod(M_centered) / ncol(M_centered)
+
+  return(GRM)
+}
+
+#' Compute the Additive Relationship Matrix (A-matrix) from pedigree data
+#'
+#' Wraps \code{cgiarBase::nrm2()} using pedigree metadata column mappings
+#' from the phenoDTfile object. Extracts the designation, mother, and father
+#' column names from \code{phenoDTfile$metadata$pedigree} and passes them
+#' along with the pedigree data frame to \code{nrm2()}.
+#'
+#' @param phenoDTfile A list object containing at minimum:
+#'   \itemize{
+#'     \item \code{data$pedigree}: A data frame with pedigree records.
+#'     \item \code{metadata$pedigree}: A data frame with columns \code{parameter}
+#'       and \code{value}, mapping "designation", "mother", and "father" to
+#'       actual column names in the pedigree data frame.
+#'   }
+#'
+#' @return A symmetric numeric matrix (the numerator relationship matrix) with
+#'   row and column names set to the designation identifiers.
+#'
+#' @export
+compute_a_matrix <- function(phenoDTfile) {
+  paramsPed <- phenoDTfile$metadata$pedigree
+  indivCol <- paramsPed[paramsPed$parameter == "designation", "value"]
+  damCol <- paramsPed[paramsPed$parameter == "mother", "value"]
+  sireCol <- paramsPed[paramsPed$parameter == "father", "value"]
+
+  N <- cgiarBase::nrm2(
+    pedData = phenoDTfile$data$pedigree,
+    indivCol = indivCol,
+    damCol = damCol,
+    sireCol = sireCol
+  )
+
+  return(N)
+}
+
+#' Classify non-selected individuals as diversity candidates
+#'
+#' A non-selected individual qualifies as a diversity candidate when:
+#' \enumerate{
+#'   \item Its Selection_Index (\code{index_value}) exceeds the 40th percentile
+#'     of index values among the selected set.
+#'   \item Its average relatedness to the selected set is below the median of
+#'     pairwise relatedness coefficients among selected individuals.
+#' }
+#'
+#' If fewer than 2 individuals are in \code{selected_set}, classification is
+#' skipped and an empty character vector is returned. Individuals with missing
+#' \code{index_value} or not found in the \code{similarity_matrix} are excluded.
+#'
+#' @param candidates_df A data.frame with at least columns \code{designation}
+#'   (character) and \code{index_value} (numeric, i.e., the Selection_Index).
+#' @param similarity_matrix A named symmetric matrix (A-matrix or GRM) with
+#'   row and column names corresponding to designations.
+#' @param selected_set Character vector of designations that are currently selected.
+#'
+#' @return Character vector of designations classified as diversity candidates.
+#'
+#' @export
+classify_diversity_candidates <- function(candidates_df, similarity_matrix, selected_set) {
+  # Guard: skip classification if fewer than 2 selected individuals
+
+  if (length(selected_set) < 2) {
+    return(character(0))
+  }
+
+  # Identify non-selected individuals from candidates_df
+  non_selected_df <- candidates_df[!(candidates_df$designation %in% selected_set), , drop = FALSE]
+
+  # Compute the 40th percentile of index_value among selected individuals
+  selected_df <- candidates_df[candidates_df$designation %in% selected_set, , drop = FALSE]
+  selected_index_values <- selected_df$index_value
+  # Remove NAs from selected index values for percentile computation
+
+  selected_index_values <- selected_index_values[!is.na(selected_index_values)]
+  if (length(selected_index_values) == 0) {
+    return(character(0))
+  }
+  index_threshold <- as.numeric(stats::quantile(selected_index_values, probs = 0.40))
+
+  # Compute median of pairwise relatedness among selected individuals
+
+  # Use only selected individuals present in the similarity matrix
+  selected_in_matrix <- intersect(selected_set, rownames(similarity_matrix))
+  if (length(selected_in_matrix) < 2) {
+    return(character(0))
+  }
+
+  selected_submatrix <- similarity_matrix[selected_in_matrix, selected_in_matrix, drop = FALSE]
+  # Extract upper triangle (pairwise relatedness among selected)
+  pairwise_values <- selected_submatrix[upper.tri(selected_submatrix)]
+  relatedness_threshold <- stats::median(pairwise_values, na.rm = TRUE)
+
+  # Evaluate each non-selected individual
+  diversity_candidates <- character(0)
+
+  for (i in seq_len(nrow(non_selected_df))) {
+    desig <- as.character(non_selected_df$designation[i])
+    idx_val <- non_selected_df$index_value[i]
+
+    # Exclude if missing index_value
+    if (is.na(idx_val)) {
+      next
+    }
+
+    # Exclude if not found in similarity_matrix
+    if (!(desig %in% rownames(similarity_matrix))) {
+      next
+    }
+
+    # Check condition (a): index_value > 40th percentile of selected
+    if (idx_val <= index_threshold) {
+      next
+    }
+
+    # Check condition (b): average relatedness to selected set < median pairwise among selected
+    relatedness_to_selected <- similarity_matrix[desig, selected_in_matrix]
+    avg_relatedness <- mean(relatedness_to_selected, na.rm = TRUE)
+
+    if (avg_relatedness < relatedness_threshold) {
+      diversity_candidates <- c(diversity_candidates, desig)
+    }
+  }
+
+  diversity_candidates
+}
+
+
+#' Find top X unrelated non-selected individuals
+#'
+#' Identifies top X non-selected individuals meeting relatedness criteria,
+#' operating in either pedigree or genomic mode.
+#'
+#' In pedigree mode: finds individuals from families with zero selected members,
+#' sorted by descending index_value.
+#'
+#' In genomic mode: finds individuals whose average GRM coefficient to the
+#' selected set is below the median of pairwise GRM coefficients among selected
+#' individuals, sorted by descending index_value.
+#'
+#' @param candidates_df data.frame with columns: designation, index_value,
+#'   and family (family only required for pedigree mode).
+#' @param similarity_matrix Named symmetric matrix (A-matrix or GRM) with
+#'   row and column names as designations.
+#' @param selected_set Character vector of selected designations.
+#' @param x Integer, number of individuals to return (0-20).
+#' @param mode Character, either "pedigree" or "genomic".
+#'
+#' @return A data.frame of qualifying individuals ranked by descending
+#'   index_value. Contains at minimum columns: designation, index_value
+#'   (and family for pedigree mode). Returns empty data.frame if x = 0
+#'   or no candidates qualify.
+#'
+#' @export
+find_top_x_unrelated <- function(candidates_df, similarity_matrix, selected_set, x, mode) {
+
+
+  # If x is 0, return empty data.frame immediately
+  if (x == 0) {
+    if (mode == "pedigree") {
+      return(data.frame(designation = character(0),
+                        index_value = numeric(0),
+                        family = character(0),
+                        stringsAsFactors = FALSE))
+    } else {
+      return(data.frame(designation = character(0),
+                        index_value = numeric(0),
+                        stringsAsFactors = FALSE))
+    }
+  }
+
+  # Identify non-selected individuals
+  non_selected_df <- candidates_df[!(candidates_df$designation %in% selected_set), , drop = FALSE]
+
+  if (nrow(non_selected_df) == 0) {
+    if (mode == "pedigree") {
+      return(data.frame(designation = character(0),
+                        index_value = numeric(0),
+                        family = character(0),
+                        stringsAsFactors = FALSE))
+    } else {
+      return(data.frame(designation = character(0),
+                        index_value = numeric(0),
+                        stringsAsFactors = FALSE))
+    }
+  }
+
+  if (mode == "pedigree") {
+    # --- Pedigree mode ---
+    # Get families of selected individuals
+    selected_df <- candidates_df[candidates_df$designation %in% selected_set, , drop = FALSE]
+    selected_families <- unique(selected_df$family)
+
+    # Find non-selected individuals from families NOT represented in the selected set
+    qualifying <- non_selected_df[!(non_selected_df$family %in% selected_families), , drop = FALSE]
+
+    # Remove rows with NA index_value
+    qualifying <- qualifying[!is.na(qualifying$index_value), , drop = FALSE]
+
+    if (nrow(qualifying) == 0) {
+      return(data.frame(designation = character(0),
+                        index_value = numeric(0),
+                        family = character(0),
+                        stringsAsFactors = FALSE))
+    }
+
+    # Sort by descending index_value
+    qualifying <- qualifying[order(qualifying$index_value, decreasing = TRUE), , drop = FALSE]
+
+    # Return the top X (or fewer if not enough candidates)
+    n_return <- min(x, nrow(qualifying))
+    result <- qualifying[seq_len(n_return), , drop = FALSE]
+
+    # Ensure at minimum the required columns are present
+    result <- result[, intersect(c("designation", "index_value", "family"), colnames(result)), drop = FALSE]
+    rownames(result) <- NULL
+    return(result)
+
+  } else {
+    # --- Genomic mode ---
+    # Use only selected individuals present in the similarity matrix
+    selected_in_matrix <- intersect(selected_set, rownames(similarity_matrix))
+
+    if (length(selected_in_matrix) < 2) {
+      # Cannot compute median pairwise if fewer than 2 selected in matrix
+      return(data.frame(designation = character(0),
+                        index_value = numeric(0),
+                        stringsAsFactors = FALSE))
+    }
+
+    # Compute the median of pairwise relatedness among selected (upper triangle)
+    selected_submatrix <- similarity_matrix[selected_in_matrix, selected_in_matrix, drop = FALSE]
+    pairwise_values <- selected_submatrix[upper.tri(selected_submatrix)]
+    median_pairwise <- stats::median(pairwise_values, na.rm = TRUE)
+
+    # Evaluate each non-selected individual present in the similarity matrix
+    qualifying_rows <- list()
+
+    for (i in seq_len(nrow(non_selected_df))) {
+      desig <- as.character(non_selected_df$designation[i])
+      idx_val <- non_selected_df$index_value[i]
+
+      # Skip if missing index_value
+      if (is.na(idx_val)) next
+
+      # Skip if not present in similarity matrix
+      if (!(desig %in% rownames(similarity_matrix))) next
+
+      # Compute average GRM coefficient to all selected individuals present in matrix
+      relatedness_to_selected <- similarity_matrix[desig, selected_in_matrix]
+      avg_relatedness <- mean(relatedness_to_selected, na.rm = TRUE)
+
+      # Keep only those with average relatedness < median pairwise among selected
+      if (avg_relatedness < median_pairwise) {
+        qualifying_rows[[length(qualifying_rows) + 1]] <- data.frame(
+          designation = desig,
+          index_value = idx_val,
+          stringsAsFactors = FALSE
+        )
+      }
+    }
+
+    if (length(qualifying_rows) == 0) {
+      return(data.frame(designation = character(0),
+                        index_value = numeric(0),
+                        stringsAsFactors = FALSE))
+    }
+
+    qualifying <- do.call(rbind, qualifying_rows)
+
+    # Sort by descending index_value
+    qualifying <- qualifying[order(qualifying$index_value, decreasing = TRUE), , drop = FALSE]
+
+    # Return the top X (or fewer if not enough qualify)
+    n_return <- min(x, nrow(qualifying))
+    result <- qualifying[seq_len(n_return), , drop = FALSE]
+    rownames(result) <- NULL
+    return(result)
+  }
+}
+
+
+#' Cluster selected individuals using genomic relationship matrix
+#'
+#' Performs hierarchical clustering on the GRM for genomic-only mode.
+#' Subsets the GRM to selected individuals, computes distances as 1 - GRM,
+#' clusters with average linkage, and cuts at the median pairwise GRM value.
+#' Within each cluster, individuals are ordered by descending Selection_Index.
+#'
+#' @param grm A named symmetric matrix (genomic relationship matrix).
+#' @param selected_designations Character vector of selected individual names.
+#' @param index_values Named numeric vector where names are designations and values
+#'   are Selection_Index scores.
+#'
+#' @return A list with:
+#'   \describe{
+#'     \item{clusters}{Named integer vector where names are designations and values
+#'       are cluster IDs, ordered within each cluster by descending index.}
+#'     \item{dendrogram}{The hclust object, or NULL if fewer than 2 individuals present.}
+#'     \item{missing}{Character vector of selected designations not found in GRM.}
+#'   }
+#'
+#' @export
+cluster_genomic_only <- function(grm, selected_designations, index_values) {
+  # 1. Subset GRM to only those selected designations present in rownames(grm)
+  present <- selected_designations[selected_designations %in% rownames(grm)]
+  missing_desig <- selected_designations[!(selected_designations %in% rownames(grm))]
+
+  # 2. If fewer than 2 selected are present in GRM, return early
+
+  if (length(present) < 2) {
+    empty_clusters <- integer(0)
+    names(empty_clusters) <- character(0)
+    return(list(clusters = empty_clusters, dendrogram = NULL, missing = missing_desig))
+  }
+
+  # Subset the GRM
+  grm_subset <- grm[present, present, drop = FALSE]
+
+  # 3. Convert GRM subset to distance: dist_mat = 1 - grm_subset (clamp negatives to 0)
+  dist_values <- 1 - grm_subset
+  dist_values[dist_values < 0] <- 0
+  dist_mat <- stats::as.dist(dist_values)
+
+  # 4. Hierarchical clustering with average linkage
+  hc <- stats::hclust(dist_mat, method = "average")
+
+  # 5. Compute median of pairwise GRM values among selected (upper triangle)
+  pairwise_grm <- grm_subset[upper.tri(grm_subset)]
+  median_grm <- stats::median(pairwise_grm, na.rm = TRUE)
+
+  # 6. Cut the dendrogram at height = 1 - median_grm (distance space)
+  cut_height <- 1 - median_grm
+  clusters <- stats::cutree(hc, h = cut_height)
+
+  # 7. Within each cluster, order individuals by descending index_values
+  # Build a data.frame for ordering
+  cluster_df <- data.frame(
+    designation = names(clusters),
+    cluster_id = as.integer(clusters),
+    stringsAsFactors = FALSE
+  )
+
+  # Match index values to designations
+  cluster_df$index_val <- index_values[cluster_df$designation]
+  # For any missing index value, use -Inf so they sort last
+
+  cluster_df$index_val[is.na(cluster_df$index_val)] <- -Inf
+
+  # Order: first by cluster_id ascending, then by index_val descending
+  cluster_df <- cluster_df[order(cluster_df$cluster_id, -cluster_df$index_val), ]
+
+  # Build the named integer vector result (ordered within clusters by descending index)
+  ordered_clusters <- cluster_df$cluster_id
+  names(ordered_clusters) <- cluster_df$designation
+
+  # 8. Return
+  list(clusters = ordered_clusters, dendrogram = hc, missing = missing_desig)
+}
