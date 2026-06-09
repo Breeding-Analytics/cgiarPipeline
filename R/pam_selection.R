@@ -1865,9 +1865,10 @@ detect_relatedness_mode <- function(phenoDTfile) {
   if (!is.null(phenoDTfile$data$pedigree)) {
     ped_meta <- phenoDTfile$metadata$pedigree
     if (!is.null(ped_meta) && is.data.frame(ped_meta)) {
-      # Count rows with non-NA, non-empty "value" entries
-      mapped_cols <- ped_meta$value[!is.na(ped_meta$value) & nzchar(trimws(ped_meta$value))]
-      if (length(mapped_cols) >= 3) {
+      # Check that designation, mother, and father are all mapped
+      required_params <- c("designation", "mother", "father")
+      mapped_params <- ped_meta$parameter[!is.na(ped_meta$value) & nzchar(trimws(ped_meta$value))]
+      if (all(required_params %in% mapped_params)) {
         has_pedigree <- TRUE
       }
     }
@@ -2103,9 +2104,19 @@ compute_grm <- function(genlight_obj) {
 #' @export
 compute_a_matrix <- function(phenoDTfile) {
   paramsPed <- phenoDTfile$metadata$pedigree
+  
   indivCol <- paramsPed[paramsPed$parameter == "designation", "value"]
   damCol <- paramsPed[paramsPed$parameter == "mother", "value"]
   sireCol <- paramsPed[paramsPed$parameter == "father", "value"]
+  
+  # Guard against missing metadata mappings
+
+  if (length(indivCol) == 0 || length(damCol) == 0 || length(sireCol) == 0) {
+    stop("Pedigree metadata mapping incomplete. Required: designation, mother, father.")
+  }
+  indivCol <- indivCol[1]
+  damCol <- damCol[1]
+  sireCol <- sireCol[1]
 
   N <- cgiarBase::nrm2(
     pedData = phenoDTfile$data$pedigree,
