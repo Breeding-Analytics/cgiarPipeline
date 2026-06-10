@@ -2006,19 +2006,18 @@ build_relatedness_tooltip <- function(designation, family_or_cluster, plot_statu
 
 #' Compute summary bar text for the relatedness plot
 #'
-#' Returns a formatted character string summarizing the selected count, number of
-#' groups (families or clusters), number of diversity candidates identified, and
-#' the data mode label.
+#' Returns a formatted character string summarizing the selected count, families
+#' in the selected set, total families displayed, diversity candidates, and mode.
 #'
 #' @param selected_count Integer scalar — number of selected individuals.
-#' @param group_count Integer scalar — number of families or clusters.
+#' @param selected_family_count Integer scalar — number of families represented in the selected set.
+#' @param group_count Integer scalar — total number of families or clusters displayed.
 #' @param diversity_count Integer scalar — number of diversity candidates identified.
-#' @param mode_string Character scalar — the operating mode label
-#'   (e.g. "pedigree-only", "pedigree-genomic", "genomic-only").
+#' @param mode_string Character scalar — the operating mode label.
 #'
 #' @return A formatted character string for the summary bar display.
 #' @export
-compute_summary_bar <- function(selected_count, group_count, diversity_count, mode_string) {
+compute_summary_bar <- function(selected_count, selected_family_count, group_count, diversity_count, mode_string) {
   group_label <- if (grepl("genomic-only", mode_string, fixed = TRUE)) {
     "clusters"
   } else {
@@ -2026,8 +2025,8 @@ compute_summary_bar <- function(selected_count, group_count, diversity_count, mo
   }
 
   paste0(
-    selected_count, " selected | ",
-    group_count, " ", group_label, " | ",
+    selected_count, " selected (", selected_family_count, " ", group_label, ") | ",
+    group_count, " total ", group_label, " | ",
     diversity_count, " diversity candidates | ",
     mode_string, " mode"
   )
@@ -2298,12 +2297,23 @@ find_top_x_unrelated <- function(candidates_df, similarity_matrix, selected_set,
                         stringsAsFactors = FALSE))
     }
 
-    # Sort by descending index_value
-    qualifying <- qualifying[order(qualifying$index_value, decreasing = TRUE), , drop = FALSE]
+    # Return top X per unrepresented family (not X total)
+    # For each unrepresented family, take the top X by descending index_value
+    result_list <- lapply(split(qualifying, qualifying$family), function(fam_df) {
+      fam_df <- fam_df[order(fam_df$index_value, decreasing = TRUE), , drop = FALSE]
+      head(fam_df, x)
+    })
+    result <- do.call(rbind, result_list)
 
-    # Return the top X (or fewer if not enough candidates)
-    n_return <- min(x, nrow(qualifying))
-    result <- qualifying[seq_len(n_return), , drop = FALSE]
+    if (is.null(result) || nrow(result) == 0) {
+      return(data.frame(designation = character(0),
+                        index_value = numeric(0),
+                        family = character(0),
+                        stringsAsFactors = FALSE))
+    }
+
+    # Sort overall by descending index_value
+    result <- result[order(result$index_value, decreasing = TRUE), , drop = FALSE]
 
     # Ensure at minimum the required columns are present
     result <- result[, intersect(c("designation", "index_value", "family"), colnames(result)), drop = FALSE]
