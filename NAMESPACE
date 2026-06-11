@@ -12,6 +12,7 @@ export(
        runInitialProdAdv,
        checkTraitQuality,
        savePlotProdAdvSelection,
+       saveFinalProdAdvSelection,
        build_prodadv_decision_table_data,
        build_prodadv_review_plot_data,
        idw_surface,
