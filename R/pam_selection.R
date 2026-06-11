@@ -539,9 +539,9 @@ savePlotProdAdvSelection <- function(
     )
   }
   
-  valid_values <- c("SELECTED", "NOT SELECTED")
+  valid_values <- c("SELECTED", "NOT SELECTED", "REVISE")
   if (!all(manual_decisions$plot_decision %in% valid_values)) {
-    stop("manual_decisions$plot_decision must contain only 'SELECTED' or 'NOT SELECTED'.")
+    stop("manual_decisions$plot_decision must contain only 'SELECTED', 'NOT SELECTED', or 'REVISE'.")
   }
   
   base_selection <- dt_object$modifications$selection
@@ -617,6 +617,105 @@ savePlotProdAdvSelection <- function(
   dt_object
 }
 
+
+#' Save final consolidated product advancement selection
+#'
+#' Persists the final selection decisions with full provenance linking
+#' back to initial, table, and plot stamps.
+#'
+#' @param analysisId Numeric timestamp ID for this analysis.
+#' @param analysisIdName Character string name for the analysis (optional).
+#' @param initialSelectionStamp Character ID of the initial selection stamp.
+#' @param tableSelectionStamp Character ID of the table selection stamp (optional).
+#' @param plotSelectionStamp Character ID of the plot selection stamp (optional).
+#' @param final_decisions Data frame with columns: designation, final_decision.
+#' @param dt_object The data object list.
+#' @return Updated dt_object with new modeling, modifications, and status rows.
+#' @export
+saveFinalProdAdvSelection <- function(
+    analysisId,
+    analysisIdName = NULL,
+    initialSelectionStamp,
+    tableSelectionStamp = NULL,
+    plotSelectionStamp = NULL,
+    final_decisions,
+    dt_object
+) {
+  # Validate required parameters
+  if (is.null(analysisId)) stop("'analysisId' is required.")
+  if (is.null(initialSelectionStamp)) stop("'initialSelectionStamp' is required.")
+  if (is.null(final_decisions) || !is.data.frame(final_decisions) || nrow(final_decisions) == 0) {
+    stop("'final_decisions' must be a non-empty data frame.")
+  }
+  if (is.null(dt_object) || !is.list(dt_object)) {
+    stop("'dt_object' must be a data object list.")
+  }
+
+  required_cols <- c("designation", "final_decision")
+  missing_cols <- setdiff(required_cols, colnames(final_decisions))
+  if (length(missing_cols) > 0) {
+    stop("Missing required columns in final_decisions: ", paste(missing_cols, collapse = ", "))
+  }
+
+  valid_values <- c("SELECTED", "NOT SELECTED", "REVISE", "CHECK")
+  invalid <- setdiff(unique(final_decisions$final_decision), valid_values)
+  if (length(invalid) > 0) {
+    stop("Invalid final_decision values: ", paste(invalid, collapse = ", "))
+  }
+
+  # --- Modeling table: analysis metadata ---
+  modeling_row <- data.frame(
+    module = "Final_prodAdv",
+    analysisId = analysisId,
+    analysisIdName = if (!is.null(analysisIdName)) analysisIdName else NA_character_,
+    trait = NA_character_,
+    environment = "across",
+    parameter = "analysisType",
+    value = "final_selection",
+    stringsAsFactors = FALSE
+  )
+
+  # --- Modeling table: input associations ---
+  stamp_values <- c(initialSelectionStamp)
+  if (!is.null(tableSelectionStamp)) stamp_values <- c(stamp_values, tableSelectionStamp)
+  if (!is.null(plotSelectionStamp)) stamp_values <- c(stamp_values, plotSelectionStamp)
+
+  input_associations <- data.frame(
+    module = rep("Final_prodAdv", length(stamp_values)),
+    analysisId = rep(analysisId, length(stamp_values)),
+    analysisIdName = rep(if (!is.null(analysisIdName)) analysisIdName else NA_character_, length(stamp_values)),
+    trait = rep(NA_character_, length(stamp_values)),
+    environment = rep("across", length(stamp_values)),
+    parameter = rep("inputObject", length(stamp_values)),
+    value = stamp_values,
+    stringsAsFactors = FALSE
+  )
+
+  # --- Modifications table ---
+  modifications <- data.frame(
+    module = rep("Final_prodAdv", nrow(final_decisions)),
+    analysisId = rep(analysisId, nrow(final_decisions)),
+    designation = final_decisions$designation,
+    reason = rep("final_selection", nrow(final_decisions)),
+    value = final_decisions$final_decision,
+    stringsAsFactors = FALSE
+  )
+
+  # --- Status table ---
+  status_row <- data.frame(
+    module = "Final_prodAdv",
+    analysisId = analysisId,
+    analysisIdName = if (!is.null(analysisIdName)) analysisIdName else NA_character_,
+    stringsAsFactors = FALSE
+  )
+
+  # Append to dt_object
+  dt_object$modeling <- rbind(dt_object$modeling, modeling_row, input_associations)
+  dt_object$modifications$selection <- rbind(dt_object$modifications$selection, modifications)
+  dt_object$status <- rbind(dt_object$status, status_row)
+
+  dt_object
+}
 
 
 build_prodadv_decision_table_data <- function(dt,
