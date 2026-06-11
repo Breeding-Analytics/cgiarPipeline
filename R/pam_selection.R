@@ -664,50 +664,60 @@ saveFinalProdAdvSelection <- function(
   }
 
   # --- Modeling table: analysis metadata ---
-  modeling_row <- data.frame(
-    module = "Final_prodAdv",
-    analysisId = analysisId,
-    analysisIdName = if (!is.null(analysisIdName)) analysisIdName else NA_character_,
-    trait = NA_character_,
-    environment = "across",
-    parameter = "analysisType",
-    value = "final_selection",
-    stringsAsFactors = FALSE
-  )
-
+  # Match columns to existing modeling table
+  modeling_cols <- colnames(dt_object$modeling)
+  
+  make_modeling_row <- function(mod, aid, aid_name, tr, env, param, val) {
+    row <- as.list(rep(NA_character_, length(modeling_cols)))
+    names(row) <- modeling_cols
+    if ("module" %in% modeling_cols) row$module <- mod
+    if ("analysisId" %in% modeling_cols) row$analysisId <- aid
+    if ("analysisIdName" %in% modeling_cols) row$analysisIdName <- aid_name
+    if ("trait" %in% modeling_cols) row$trait <- tr
+    if ("environment" %in% modeling_cols) row$environment <- env
+    if ("parameter" %in% modeling_cols) row$parameter <- param
+    if ("value" %in% modeling_cols) row$value <- val
+    as.data.frame(row, stringsAsFactors = FALSE)
+  }
+  
+  aid_name <- if (!is.null(analysisIdName)) analysisIdName else NA_character_
+  
+  modeling_row <- make_modeling_row("Final_prodAdv", analysisId, aid_name, NA_character_, "across", "analysisType", "final_selection")
+  
   # --- Modeling table: input associations ---
   stamp_values <- c(initialSelectionStamp)
   if (!is.null(tableSelectionStamp)) stamp_values <- c(stamp_values, tableSelectionStamp)
   if (!is.null(plotSelectionStamp)) stamp_values <- c(stamp_values, plotSelectionStamp)
 
-  input_associations <- data.frame(
-    module = rep("Final_prodAdv", length(stamp_values)),
-    analysisId = rep(analysisId, length(stamp_values)),
-    analysisIdName = rep(if (!is.null(analysisIdName)) analysisIdName else NA_character_, length(stamp_values)),
-    trait = rep(NA_character_, length(stamp_values)),
-    environment = rep("across", length(stamp_values)),
-    parameter = rep("inputObject", length(stamp_values)),
-    value = stamp_values,
-    stringsAsFactors = FALSE
-  )
+  input_associations <- do.call(rbind, lapply(stamp_values, function(sv) {
+    make_modeling_row("Final_prodAdv", analysisId, aid_name, NA_character_, "across", "inputObject", sv)
+  }))
 
   # --- Modifications table ---
-  modifications <- data.frame(
-    module = rep("Final_prodAdv", nrow(final_decisions)),
-    analysisId = rep(analysisId, nrow(final_decisions)),
-    designation = final_decisions$designation,
-    reason = rep("final_selection", nrow(final_decisions)),
-    value = final_decisions$final_decision,
-    stringsAsFactors = FALSE
-  )
+  mod_cols <- colnames(dt_object$modifications$selection)
+  make_mod_row <- function(mod, aid, desig, reason, val) {
+    row <- as.list(rep(NA_character_, length(mod_cols)))
+    names(row) <- mod_cols
+    if ("module" %in% mod_cols) row$module <- mod
+    if ("analysisId" %in% mod_cols) row$analysisId <- aid
+    if ("designation" %in% mod_cols) row$designation <- desig
+    if ("reason" %in% mod_cols) row$reason <- reason
+    if ("value" %in% mod_cols) row$value <- val
+    as.data.frame(row, stringsAsFactors = FALSE)
+  }
+  
+  modifications <- do.call(rbind, lapply(seq_len(nrow(final_decisions)), function(i) {
+    make_mod_row("Final_prodAdv", analysisId, final_decisions$designation[i], "final_selection", final_decisions$final_decision[i])
+  }))
 
   # --- Status table ---
-  status_row <- data.frame(
-    module = "Final_prodAdv",
-    analysisId = analysisId,
-    analysisIdName = if (!is.null(analysisIdName)) analysisIdName else NA_character_,
-    stringsAsFactors = FALSE
-  )
+  status_cols <- colnames(dt_object$status)
+  status_row <- as.list(rep(NA_character_, length(status_cols)))
+  names(status_row) <- status_cols
+  if ("module" %in% status_cols) status_row$module <- "Final_prodAdv"
+  if ("analysisId" %in% status_cols) status_row$analysisId <- analysisId
+  if ("analysisIdName" %in% status_cols) status_row$analysisIdName <- aid_name
+  status_row <- as.data.frame(status_row, stringsAsFactors = FALSE)
 
   # Append to dt_object
   dt_object$modeling <- rbind(dt_object$modeling, modeling_row, input_associations)
