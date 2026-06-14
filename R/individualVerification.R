@@ -157,9 +157,9 @@ individualVerification <- function(
   newStatus <- data.frame(module="gVerif", analysisId=analysisId, analysisIdName=NA)
   object$status <- rbind( object$status, newStatus[,colnames(object$status)])
   ## modeling
-  modeling <- data.frame(module="gVerif",  analysisId=analysisId, trait=c(rep("none",length(colsForExpecGeno)+length(het)+length(matchThres)+length(markersToBeUsed) ),"inputObject"), environment="general",
-                         parameter= c(rep("expectedGenoColumn",length(colsForExpecGeno)),"ParentMaxHetThresh", "UpperMatchProbThres","MidMatchProbThres","LowerMatchProbThres",rep("markerUsed",length(markersToBeUsed)), "analysisId"  ),
-                         value= c(colsForExpecGeno,het,matchThres,markersToBeUsed,analysisIdForGenoModifications ))
+  modeling <- data.frame(module="gVerif",  analysisId=analysisId, trait=c(rep("none",length(colsForExpecGeno)+length(het)+2+length(markersToBeUsed) ),"inputObject"), environment="general",
+                         parameter= c(rep("expectedGenoColumn",length(colsForExpecGeno)),"ParentMaxHetThresh", "UpperMatchProbThres","LowerMatchProbThres",rep("markerUsed",length(markersToBeUsed)), "analysisId"  ),
+                         value= c(colsForExpecGeno,het,matchThres[1],matchThres[3],markersToBeUsed,analysisIdForGenoModifications ))
   if(is.null(object$modeling)){
     object$modeling <-  modeling
   }else{
@@ -186,10 +186,10 @@ individualVerification <- function(
   het_pct_mal <- (pmax(n_non_missing - n_homo, 0) / pmax(n_non_missing, 1)) * 100
   
   #Filters
-  het_filter = (het_pct_fem < het & het_pct_mal < het)
+  het_filter = (het_pct_fem <= het & het_pct_mal <= het)
   
-  indivMatchedN = length(which(res$metricsInd$probMatch[het_filter] >= matchThres[1]))
-  indivUnmatchedN = nInds - indivMatchedN
+  indivMatchedN = length(which(het_filter & res$metricsInd$probMatch >= matchThres[1]))
+  indivUnmatchedN = nrow(cross_filt) - indivMatchedN
   object$metrics <- rbind(object$metrics,
                                data.frame(module="gVerif",analysisId=analysisId, trait="none", environment="general",
                                           parameter= c("nMarkers","nInds", "monomorphicMarkersN","polymorphicMarkersN","indivMatchedN","indivUnmatchedN"),
