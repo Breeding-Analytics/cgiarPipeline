@@ -14,6 +14,101 @@ coalesce_chr <- function(...) {
 }
 
 
+#' Check trait quality before running initial selection
+#'
+#' Returns a list of flagged traits with reasons. Called by UI to show
+#' confirmation dialog before proceeding.
+#' @export
+checkTraitQuality <- function(args, dt_object) {
+  
+  check_entry_type_value <- args$checkEntryTypeValue
+  if (is.null(check_entry_type_value) || !nzchar(check_entry_type_value)) {
+    check_entry_type_value <- NULL
+  }
+  
+  preds <- dt_object$predictions
+  mta_preds <- preds[preds$analysisId == args$mtaStamp & preds$effectType == "designation", ]
+  mta_preds <- mta_preds[mta_preds$trait %in% args$traitsToEvaluate, ]
+  
+  # Deduplicate (same as runInitialProdAdv)
+  dup_key <- paste(mta_preds$designation, mta_preds$trait, sep = "|||")
+  if (any(duplicated(dup_key))) {
+    agg_cols <- c("predictedValue")
+    if ("reliability" %in% colnames(mta_preds)) agg_cols <- c(agg_cols, "reliability")
+    if ("stdError" %in% colnames(mta_preds)) agg_cols <- c(agg_cols, "stdError")
+    mta_preds <- do.call(rbind, lapply(split(mta_preds, dup_key), function(x) {
+      row1 <- x[1, , drop = FALSE]
+      for (col in agg_cols) {
+        if (col %in% colnames(x)) row1[[col]] <- mean(x[[col]], na.rm = TRUE)
+      }
+      row1
+    }))
+    rownames(mta_preds) <- NULL
+  }
+  
+  # Filter to candidates only (same as runInitialProdAdv)
+  if (!is.null(args$selectedCandidates)) {
+    if (is.null(check_entry_type_value)) {
+      mta_preds <- mta_preds[mta_preds$designation %in% args$selectedCandidates, ]
+    } else {
+      mta_preds <- mta_preds[
+        mta_preds$designation %in% args$selectedCandidates |
+          mta_preds$entryType == check_entry_type_value, ]
+    }
+  }
+  
+  if (is.null(check_entry_type_value)) {
+    candidate_preds <- mta_preds
+  } else {
+    candidate_preds <- mta_preds[mta_preds$entryType != check_entry_type_value, ]
+  }
+  
+  reliability_threshold <- 0.20
+  reliability_pct_threshold <- 0.60
+  rsr_threshold <- 1.0
+  
+  flagged_traits <- character(0)
+  flag_reasons <- list()
+  
+  for (t in args$traitsToEvaluate) {
+    trait_cand <- candidate_preds[candidate_preds$trait == t, ]
+    reasons <- character(0)
+    
+    if ("reliability" %in% colnames(trait_cand)) {
+      trait_rel <- trait_cand$reliability[!is.na(trait_cand$reliability)]
+      if (length(trait_rel) > 0) {
+        pct_low <- mean(trait_rel < reliability_threshold)
+        if (pct_low > reliability_pct_threshold) {
+          reasons <- c(reasons, sprintf("low reliability (%.0f%% below %.2f)", pct_low * 100, reliability_threshold))
+        }
+      }
+    }
+    
+    if ("stdError" %in% colnames(trait_cand)) {
+      blups <- trait_cand$predictedValue[!is.na(trait_cand$predictedValue)]
+      ses <- trait_cand$stdError[!is.na(trait_cand$stdError)]
+      if (length(blups) > 2 && length(ses) > 0 && mean(ses) > 0) {
+        rsr <- sd(blups) / mean(ses)
+        if (rsr < rsr_threshold) {
+          reasons <- c(reasons, sprintf("ranking not separable (RSR=%.2f)", rsr))
+        }
+      }
+    }
+    
+    if (length(reasons) > 0) {
+      flagged_traits <- c(flagged_traits, t)
+      flag_reasons[[t]] <- paste(reasons, collapse = "; ")
+    }
+  }
+  
+  list(
+    flagged_traits = flagged_traits,
+    flag_reasons = flag_reasons,
+    has_issues = length(flagged_traits) > 0
+  )
+}
+
+
 runInitialProdAdv <- function(analysisId = as.numeric(Sys.time()),
                              analysisIdName,
                              args,
@@ -64,19 +159,16 @@ runInitialProdAdv <- function(analysisId = as.numeric(Sys.time()),
     ]
   }
 
-  # ---- Trait quality filtering ----
-  # Two filters applied:
-  # 1. Reliability filter: exclude traits where reliability < 0.20 for >60% of candidates
-  # 2. Ranking Separability Ratio (RSR): exclude traits where SD(BLUPs) / mean(SE) < 1.0
-  #    RSR < 1 means the standard errors are as large as the genetic differences — ranking is noise
+  # ---- Trait quality assessment ----
+  # Compute reliability and RSR metrics per trait (informational — no exclusion)
+  # Flagged traits are reported back to UI for user decision
   reliability_threshold <- 0.20
   reliability_pct_threshold <- 0.60
   rsr_threshold <- 1.0
-  excluded_traits <- character(0)
-  exclusion_reasons <- list()
-  traits_to_use <- args$traitsToEvaluate
+  flagged_traits <- character(0)
+  flag_reasons <- list()
 
-  # Identify candidates for filtering
+  # Identify candidates for quality check
   if (is.null(check_entry_type_value)) {
     candidate_preds <- mta_preds
   } else {
@@ -87,7 +179,7 @@ runInitialProdAdv <- function(analysisId = as.numeric(Sys.time()),
     trait_cand <- candidate_preds[candidate_preds$trait == t, ]
     reasons <- character(0)
 
-    # Filter 1: Reliability
+    # Check 1: Reliability
     if ("reliability" %in% colnames(trait_cand)) {
       trait_rel <- trait_cand$reliability[!is.na(trait_cand$reliability)]
       if (length(trait_rel) > 0) {
@@ -98,7 +190,7 @@ runInitialProdAdv <- function(analysisId = as.numeric(Sys.time()),
       }
     }
 
-    # Filter 2: Ranking Separability Ratio (RSR)
+    # Check 2: Ranking Separability Ratio (RSR)
     if ("stdError" %in% colnames(trait_cand)) {
       blups <- trait_cand$predictedValue[!is.na(trait_cand$predictedValue)]
       ses <- trait_cand$stdError[!is.na(trait_cand$stdError)]
@@ -111,14 +203,19 @@ runInitialProdAdv <- function(analysisId = as.numeric(Sys.time()),
     }
 
     if (length(reasons) > 0) {
-      excluded_traits <- c(excluded_traits, t)
-      exclusion_reasons[[t]] <- paste(reasons, collapse = "; ")
+      flagged_traits <- c(flagged_traits, t)
+      flag_reasons[[t]] <- paste(reasons, collapse = "; ")
     }
   }
 
-  traits_to_use <- setdiff(args$traitsToEvaluate, excluded_traits)
+  # Use only the traits the user chose to keep (after seeing the flags)
+  # args$traitsToUse is set by the UI: either all traits or with flagged ones removed
+  traits_to_use <- args$traitsToEvaluate
+  if (!is.null(args$excludeTraits) && length(args$excludeTraits) > 0) {
+    traits_to_use <- setdiff(traits_to_use, args$excludeTraits)
+  }
   if (length(traits_to_use) == 0) {
-    stop("All traits were excluded due to quality filters (low reliability and/or poor ranking separability). Cannot proceed with selection.")
+    stop("No traits remaining after exclusion. Cannot proceed with selection.")
   }
 
   # ---- Build prediction and reliability matrices ----
@@ -175,7 +272,20 @@ runInitialProdAdv <- function(analysisId = as.numeric(Sys.time()),
   mta_preds_long$entryType <- entry_type_lookup$entryType[match(mta_preds_long$designation, entry_type_lookup$designation)]
 
   # ---- Apply index selection (% or number) ----
-  n_candidates <- sum(mta_preds_long$entryType != check_entry_type_value)
+  if (is.null(check_entry_type_value)) {
+    n_candidates <- nrow(mta_preds_long)
+    candidate_indices <- seq_len(nrow(mta_preds_long))
+  } else {
+    # Case-insensitive comparison for entryType
+    candidate_indices <- which(toupper(trimws(mta_preds_long$entryType)) != toupper(trimws(check_entry_type_value)))
+    n_candidates <- length(candidate_indices)
+  }
+
+  if (n_candidates == 0) {
+    # Fallback: treat all as candidates if no match found
+    n_candidates <- nrow(mta_preds_long)
+    candidate_indices <- seq_len(nrow(mta_preds_long))
+  }
 
   if (!is.null(args$nSelected) && args$nSelected > 0) {
     n_selected <- min(args$nSelected, n_candidates)
@@ -184,16 +294,20 @@ runInitialProdAdv <- function(analysisId = as.numeric(Sys.time()),
     n_selected <- as.integer(n_candidates * (top_pct / 100))
   }
   n_selected <- max(c(1, n_selected))
+  
+  message(sprintf("[PAM] n_candidates=%d, n_selected=%d, topPct=%s, nSelected_arg=%s, check_entry_type='%s'",
+                  n_candidates, n_selected, 
+                  as.character(args$topPctSelected), as.character(args$nSelected),
+                  as.character(check_entry_type_value)))
 
-  candidate_indices <- which(mta_preds_long$entryType != check_entry_type_value)
   index_order <- order(mta_preds_long$index_value[candidate_indices], decreasing = TRUE)
   selected_positions <- candidate_indices[index_order[1:n_selected]]
   selected_designations <- mta_preds_long$designation[selected_positions]
 
-  mta_preds_long$index_selection <- "NOT SELECTED"
-  mta_preds_long$index_selection[mta_preds_long$designation %in% selected_designations] <- "SELECTED"
+  mta_preds_long$index_decision <- "NOT SELECTED"
+  mta_preds_long$index_decision[mta_preds_long$designation %in% selected_designations] <- "SELECTED"
   if (!is.null(check_entry_type_value)) {
-    mta_preds_long$index_selection[mta_preds_long$entryType == check_entry_type_value] <- "CHECK"
+    mta_preds_long$index_decision[toupper(trimws(mta_preds_long$entryType)) == toupper(trimws(check_entry_type_value))] <- "CHECK"
   }
 
   # ---- Apply trait-specific thresholds ----
@@ -246,7 +360,7 @@ runInitialProdAdv <- function(analysisId = as.numeric(Sys.time()),
     }
 
     if (!is.null(check_entry_type_value)) {
-      decision[mta_preds_long$entryType == check_entry_type_value] <- "CHECK"
+      decision[toupper(trimws(mta_preds_long$entryType)) == toupper(trimws(check_entry_type_value))] <- "CHECK"
     }
 
     trait_decision[, paste0(t, "_trait_decision")] <- decision
@@ -336,18 +450,33 @@ runInitialProdAdv <- function(analysisId = as.numeric(Sys.time()),
     modeling <- if (is.null(modeling)) trait_model else rbind(modeling, trait_model)
   }
 
-  # Record excluded traits in modeling table
-  if (length(excluded_traits) > 0) {
+  # Record which traits were actually excluded by user choice
+  if (!is.null(args$excludeTraits) && length(args$excludeTraits) > 0) {
     excl_rows <- data.frame(
       module = "Init_prodAdv",
       analysisId = analysisId,
-      trait = excluded_traits,
+      trait = args$excludeTraits,
       environment = NA,
-      parameter = "excluded_low_reliability",
+      parameter = "user_excluded_trait",
       value = "TRUE",
       stringsAsFactors = FALSE
     )
     modeling <- rbind(modeling, excl_rows)
+  }
+
+  # Record flagged traits that were KEPT (not excluded) — informational only
+  kept_flagged <- setdiff(flagged_traits, if (!is.null(args$excludeTraits)) args$excludeTraits else character(0))
+  if (length(kept_flagged) > 0) {
+    flag_rows <- data.frame(
+      module = "Init_prodAdv",
+      analysisId = analysisId,
+      trait = kept_flagged,
+      environment = NA,
+      parameter = "flagged_low_quality",
+      value = sapply(kept_flagged, function(t) flag_reasons[[t]]),
+      stringsAsFactors = FALSE
+    )
+    modeling <- rbind(modeling, flag_rows)
   }
 
   # ---- Create status table ----
@@ -368,9 +497,9 @@ runInitialProdAdv <- function(analysisId = as.numeric(Sys.time()),
   dt_object$modeling <- rbind(dt_object$modeling, modeling)
   dt_object$status <- rbind(dt_object$status, status)
 
-  # Attach excluded traits info as attribute for UI warning
-  attr(dt_object, "pam_excluded_traits") <- excluded_traits
-  attr(dt_object, "pam_exclusion_reasons") <- exclusion_reasons
+  # Attach flagged traits info as attribute for UI warning
+  attr(dt_object, "pam_flagged_traits") <- flagged_traits
+  attr(dt_object, "pam_flag_reasons") <- flag_reasons
 
   dt_object
 
@@ -410,9 +539,9 @@ savePlotProdAdvSelection <- function(
     )
   }
   
-  valid_values <- c("SELECTED", "NOT SELECTED")
+  valid_values <- c("SELECTED", "NOT SELECTED", "REVISE")
   if (!all(manual_decisions$plot_decision %in% valid_values)) {
-    stop("manual_decisions$plot_decision must contain only 'SELECTED' or 'NOT SELECTED'.")
+    stop("manual_decisions$plot_decision must contain only 'SELECTED', 'NOT SELECTED', or 'REVISE'.")
   }
   
   base_selection <- dt_object$modifications$selection
@@ -489,6 +618,115 @@ savePlotProdAdvSelection <- function(
 }
 
 
+#' Save final consolidated product advancement selection
+#'
+#' Persists the final selection decisions with full provenance linking
+#' back to initial, table, and plot stamps.
+#'
+#' @param analysisId Numeric timestamp ID for this analysis.
+#' @param analysisIdName Character string name for the analysis (optional).
+#' @param initialSelectionStamp Character ID of the initial selection stamp.
+#' @param tableSelectionStamp Character ID of the table selection stamp (optional).
+#' @param plotSelectionStamp Character ID of the plot selection stamp (optional).
+#' @param final_decisions Data frame with columns: designation, final_decision.
+#' @param dt_object The data object list.
+#' @return Updated dt_object with new modeling, modifications, and status rows.
+#' @export
+saveFinalProdAdvSelection <- function(
+    analysisId,
+    analysisIdName = NULL,
+    initialSelectionStamp,
+    tableSelectionStamp = NULL,
+    plotSelectionStamp = NULL,
+    final_decisions,
+    dt_object
+) {
+  # Validate required parameters
+  if (is.null(analysisId)) stop("'analysisId' is required.")
+  if (is.null(initialSelectionStamp)) stop("'initialSelectionStamp' is required.")
+  if (is.null(final_decisions) || !is.data.frame(final_decisions) || nrow(final_decisions) == 0) {
+    stop("'final_decisions' must be a non-empty data frame.")
+  }
+  if (is.null(dt_object) || !is.list(dt_object)) {
+    stop("'dt_object' must be a data object list.")
+  }
+
+  required_cols <- c("designation", "final_decision")
+  missing_cols <- setdiff(required_cols, colnames(final_decisions))
+  if (length(missing_cols) > 0) {
+    stop("Missing required columns in final_decisions: ", paste(missing_cols, collapse = ", "))
+  }
+
+  valid_values <- c("SELECTED", "NOT SELECTED", "REVISE", "CHECK")
+  invalid <- setdiff(unique(final_decisions$final_decision), valid_values)
+  if (length(invalid) > 0) {
+    stop("Invalid final_decision values: ", paste(invalid, collapse = ", "))
+  }
+
+  # --- Modeling table: analysis metadata ---
+  # Match columns to existing modeling table
+  modeling_cols <- colnames(dt_object$modeling)
+  
+  make_modeling_row <- function(mod, aid, aid_name, tr, env, param, val) {
+    row <- as.list(rep(NA_character_, length(modeling_cols)))
+    names(row) <- modeling_cols
+    if ("module" %in% modeling_cols) row$module <- mod
+    if ("analysisId" %in% modeling_cols) row$analysisId <- aid
+    if ("analysisIdName" %in% modeling_cols) row$analysisIdName <- aid_name
+    if ("trait" %in% modeling_cols) row$trait <- tr
+    if ("environment" %in% modeling_cols) row$environment <- env
+    if ("parameter" %in% modeling_cols) row$parameter <- param
+    if ("value" %in% modeling_cols) row$value <- val
+    as.data.frame(row, stringsAsFactors = FALSE)
+  }
+  
+  aid_name <- if (!is.null(analysisIdName)) analysisIdName else NA_character_
+  
+  modeling_row <- make_modeling_row("Final_prodAdv", analysisId, aid_name, NA_character_, "across", "analysisType", "final_selection")
+  
+  # --- Modeling table: input associations ---
+  stamp_values <- c(initialSelectionStamp)
+  if (!is.null(tableSelectionStamp)) stamp_values <- c(stamp_values, tableSelectionStamp)
+  if (!is.null(plotSelectionStamp)) stamp_values <- c(stamp_values, plotSelectionStamp)
+
+  input_associations <- do.call(rbind, lapply(stamp_values, function(sv) {
+    make_modeling_row("Final_prodAdv", analysisId, aid_name, NA_character_, "across", "inputObject", sv)
+  }))
+
+  # --- Modifications table ---
+  mod_cols <- colnames(dt_object$modifications$selection)
+  make_mod_row <- function(mod, aid, desig, reason, val) {
+    row <- as.list(rep(NA_character_, length(mod_cols)))
+    names(row) <- mod_cols
+    if ("module" %in% mod_cols) row$module <- mod
+    if ("analysisId" %in% mod_cols) row$analysisId <- aid
+    if ("designation" %in% mod_cols) row$designation <- desig
+    if ("reason" %in% mod_cols) row$reason <- reason
+    if ("value" %in% mod_cols) row$value <- val
+    as.data.frame(row, stringsAsFactors = FALSE)
+  }
+  
+  modifications <- do.call(rbind, lapply(seq_len(nrow(final_decisions)), function(i) {
+    make_mod_row("Final_prodAdv", analysisId, final_decisions$designation[i], "final_selection", final_decisions$final_decision[i])
+  }))
+
+  # --- Status table ---
+  status_cols <- colnames(dt_object$status)
+  status_row <- as.list(rep(NA_character_, length(status_cols)))
+  names(status_row) <- status_cols
+  if ("module" %in% status_cols) status_row$module <- "Final_prodAdv"
+  if ("analysisId" %in% status_cols) status_row$analysisId <- analysisId
+  if ("analysisIdName" %in% status_cols) status_row$analysisIdName <- aid_name
+  status_row <- as.data.frame(status_row, stringsAsFactors = FALSE)
+
+  # Append to dt_object
+  dt_object$modeling <- rbind(dt_object$modeling, modeling_row, input_associations)
+  dt_object$modifications$selection <- rbind(dt_object$modifications$selection, modifications)
+  dt_object$status <- rbind(dt_object$status, status_row)
+
+  dt_object
+}
+
 
 build_prodadv_decision_table_data <- function(dt,
                                               initial_stamp,
@@ -531,8 +769,8 @@ build_prodadv_decision_table_data <- function(dt,
   selected_traits <- unique(modeling_init$trait)
   selected_traits <- selected_traits[!is.na(selected_traits) & nzchar(selected_traits)]
   
-  # Exclude traits marked as excluded_low_reliability
-  excluded_trait_rows <- modeling_init[modeling_init$parameter == "excluded_low_reliability", , drop = FALSE]
+  # Exclude traits marked as user_excluded_trait
+  excluded_trait_rows <- modeling_init[modeling_init$parameter == "user_excluded_trait", , drop = FALSE]
   if (nrow(excluded_trait_rows) > 0) {
     selected_traits <- setdiff(selected_traits, excluded_trait_rows$trait)
   }
@@ -567,23 +805,9 @@ build_prodadv_decision_table_data <- function(dt,
   
   names(pred_wide) <- sub("^predictedValue\\.", "", names(pred_wide))
   
-  # Compute index_value from stored weights in modeling table
+  # Compute index_value from stored weights in modeling table (with reliability weighting)
+  # IMPORTANT: only use designations in the initial selection for scaling (same population as runInitialProdAdv)
   weight_rows <- modeling_init[modeling_init$parameter == "index_weight", , drop = FALSE]
-  if (nrow(weight_rows) > 0) {
-    index_weights <- as.numeric(weight_rows$value)
-    names(index_weights) <- weight_rows$trait
-    avail_traits <- intersect(names(index_weights), colnames(pred_wide))
-    if (length(avail_traits) > 0) {
-      trait_matrix <- as.matrix(pred_wide[, avail_traits, drop = FALSE])
-      scaled_matrix <- scale(trait_matrix)
-      w <- index_weights[avail_traits]
-      pred_wide$index_value <- as.numeric(scaled_matrix %*% w)
-    } else {
-      pred_wide$index_value <- NA_real_
-    }
-  } else {
-    pred_wide$index_value <- NA_real_
-  }
   
   init_sel <- dt$modifications$selection[
     dt$modifications$selection$analysisId %in% initial_stamp &
@@ -601,6 +825,47 @@ build_prodadv_decision_table_data <- function(dt,
   names(init_sel)[names(init_sel) == "value"] <- "initial_decision"
   review_designations <- unique(init_sel$designation)
   
+  # Filter pred_wide to only review designations BEFORE computing index
+  pred_wide <- pred_wide[pred_wide$designation %in% review_designations, , drop = FALSE]
+  
+  if (nrow(weight_rows) > 0) {
+    index_weights <- as.numeric(weight_rows$value)
+    names(index_weights) <- weight_rows$trait
+    avail_traits <- intersect(names(index_weights), colnames(pred_wide))
+    if (length(avail_traits) > 0) {
+      trait_matrix <- as.matrix(pred_wide[, avail_traits, drop = FALSE])
+      scaled_matrix <- scale(trait_matrix)
+      w <- index_weights[avail_traits]
+      
+      # Apply reliability weighting (same as runInitialProdAdv)
+      if ("reliability" %in% colnames(preds)) {
+        preds_review <- preds[preds$designation %in% review_designations, , drop = FALSE]
+        rel_data <- reshape(
+          preds_review[, c("designation", "trait", "reliability"), drop = FALSE],
+          idvar = "designation", timevar = "trait", direction = "wide"
+        )
+        names(rel_data) <- sub("^reliability\\.", "", names(rel_data))
+        rel_avail <- intersect(avail_traits, colnames(rel_data))
+        if (length(rel_avail) == length(avail_traits)) {
+          rel_matrix <- as.matrix(rel_data[match(pred_wide$designation, rel_data$designation), avail_traits, drop = FALSE])
+          rel_matrix[is.na(rel_matrix)] <- 0
+          rel_matrix <- pmax(0, pmin(1, rel_matrix))
+          reliability_penalized <- scaled_matrix * sqrt(rel_matrix)
+          pred_wide$index_value <- as.numeric(reliability_penalized %*% w)
+        } else {
+          pred_wide$index_value <- as.numeric(scaled_matrix %*% w)
+        }
+      } else {
+        pred_wide$index_value <- as.numeric(scaled_matrix %*% w)
+      }
+    } else {
+      pred_wide$index_value <- NA_real_
+    }
+  } else {
+    pred_wide$index_value <- NA_real_
+  }
+  
+  # Filter preds to review designations (init_sel and review_designations already defined above)
   preds <- preds[
     preds$designation %in% review_designations,
     ,
@@ -738,8 +1003,12 @@ build_prodadv_decision_table_data <- function(dt,
     base_df$initial_decision
   )
   
-  base_df$is_check_sort <- ifelse(base_df$initial_decision == "CHECK", 0, 1)
-  base_df <- base_df[order(base_df$is_check_sort, base_df$designation), , drop = FALSE]
+  # Sort by index_value descending (checks participate in ordering)
+  if ("index_value" %in% colnames(base_df)) {
+    base_df <- base_df[order(-as.numeric(base_df$index_value)), , drop = FALSE]
+  } else {
+    base_df <- base_df[order(base_df$designation), , drop = FALSE]
+  }
   
   base_df
 }
@@ -1079,6 +1348,19 @@ apply_prodadv_trait_rule <- function(trait_df, rule_def, check_entry_type_value 
   trait_value <- trait_df$predictedValue
   decision <- rep(NA_character_, nrow(trait_df))
   
+  # Handle NULL or "None" rule type — all pass
+  if (is.null(rule_def$ruleType) || identical(rule_def$ruleType, "None") || identical(rule_def$ruleType, "")) {
+    decision <- rep("SELECTED", nrow(trait_df))
+    if (!is.null(check_entry_type_value)) {
+      decision[trait_df$entryType == check_entry_type_value] <- "CHECK"
+    }
+    return(data.frame(
+      designation = trait_df$designation,
+      decision = decision,
+      stringsAsFactors = FALSE
+    ))
+  }
+  
   if (identical(rule_def$ruleType, "Threshold")) {
     if (identical(rule_def$direction, "Higher is better")) {
       decision <- ifelse(trait_value >= rule_def$threshold, "SELECTED", "NOT SELECTED")
@@ -1154,6 +1436,11 @@ apply_prodadv_trait_rule <- function(trait_df, rule_def, check_entry_type_value 
     }
   }
   
+  else if (is.null(rule_def$ruleType) || identical(rule_def$ruleType, "None") || identical(rule_def$ruleType, "")) {
+    # No threshold set — all candidates pass
+    decision <- rep("SELECTED", nrow(trait_df))
+  }
+  
   else {
     stop(paste("Unsupported rule type:", rule_def$ruleType))
   }
@@ -1175,7 +1462,11 @@ build_prodadv_trait_decision_table <- function(preds, modeling_init, check_entry
   stopifnot(is.data.frame(modeling_init))
   stopifnot(all(c("designation", "trait", "predictedValue", "entryType") %in% colnames(preds)))
   
-  rule_list <- get_prodadv_trait_rules(modeling_init)
+  # Exclude traits marked as user_excluded_trait
+  excl_traits <- modeling_init$trait[modeling_init$parameter == "user_excluded_trait"]
+  modeling_filtered <- modeling_init[!modeling_init$trait %in% excl_traits, , drop = FALSE]
+  
+  rule_list <- get_prodadv_trait_rules(modeling_filtered)
   selected_traits <- names(rule_list)
   
   decision_tables <- lapply(selected_traits, function(tr) {
@@ -1656,6 +1947,157 @@ buildProdAdvPerformanceProfile <- function(
 }
 
 
+#' Detect the relatedness visualization mode based on available data
+#'
+#' Determines which visualization mode to use for the relatedness plot by
+#' checking for the presence of pedigree and genomic data in a phenoDTfile object.
+#'
+#' @param phenoDTfile A list representing the phenotypic data object, expected to
+#'   contain \code{$data$pedigree}, \code{$metadata$pedigree}, and
+#'   \code{$data$geno_imp}.
+#'
+#' @return A list with the following elements:
+#' \describe{
+#'   \item{mode}{Character string: one of \code{"pedigree-only"},
+#'     \code{"pedigree-genomic"}, \code{"genomic-only"}, or \code{"none"}.}
+#'   \item{has_pedigree}{Logical indicating whether valid pedigree data is available.}
+#'   \item{has_genomic}{Logical indicating whether genomic data is available.}
+#'   \item{message}{Character string with a validation message when mode is
+#'     \code{"none"}, or \code{NULL} otherwise.}
+#' }
+#'
+#' @export
+detect_relatedness_mode <- function(phenoDTfile) {
+  # Check pedigree availability:
+  # Pedigree data must be non-null AND metadata$pedigree must have >= 3 mapped columns
+  has_pedigree <- FALSE
+  if (!is.null(phenoDTfile$data$pedigree)) {
+    ped_meta <- phenoDTfile$metadata$pedigree
+    if (!is.null(ped_meta) && is.data.frame(ped_meta)) {
+      # Check that designation, mother, and father are all mapped
+      required_params <- c("designation", "mother", "father")
+      mapped_params <- ped_meta$parameter[!is.na(ped_meta$value) & nzchar(trimws(ped_meta$value))]
+      if (all(required_params %in% mapped_params)) {
+        has_pedigree <- TRUE
+      }
+    }
+  }
+
+  # Check genomic availability:
+  # geno_imp must have at least one entry (length >= 1)
+  has_genomic <- FALSE
+  if (!is.null(phenoDTfile$data$geno_imp)) {
+    if (length(phenoDTfile$data$geno_imp) >= 1) {
+      has_genomic <- TRUE
+    }
+  }
+
+  # Determine mode
+  if (has_pedigree && has_genomic) {
+    mode <- "pedigree-genomic"
+  } else if (has_pedigree && !has_genomic) {
+    mode <- "pedigree-only"
+  } else if (!has_pedigree && has_genomic) {
+    mode <- "genomic-only"
+  } else {
+    mode <- "none"
+  }
+
+  # Build message for "none" mode
+  msg <- NULL
+  if (mode == "none") {
+    msg <- "Relatedness plot requires pedigree or genotypic information. Please upload pedigree or marker data in the Data Retrieval section."
+  }
+
+  list(
+    mode = mode,
+    has_pedigree = has_pedigree,
+    has_genomic = has_genomic,
+    message = msg
+  )
+}
+
+
+#' Assign individuals to families based on pedigree cross information
+#'
+#' Each individual is assigned a family label derived from the unique combination
+#' of its mother and father. Individuals with both parents missing are placed in
+#' "Founders / Unknown Family". Individuals with one parent missing use
+#' "KnownParent \u00d7 Unknown".
+#'
+#' @param pedigree_df A data.frame containing pedigree records.
+#' @param designation_col Character string naming the column with individual identifiers.
+#' @param mother_col Character string naming the column with mother identifiers.
+#' @param father_col Character string naming the column with father identifiers.
+#'
+#' @return A named character vector mapping each designation to its family label.
+#'
+#' @export
+assign_families <- function(pedigree_df, designation_col, mother_col, father_col) {
+  designations <- as.character(pedigree_df[[designation_col]])
+  mothers <- as.character(pedigree_df[[mother_col]])
+  fathers <- as.character(pedigree_df[[father_col]])
+
+  # Treat NA and empty string as missing
+  mother_missing <- is.na(mothers) | mothers == ""
+  father_missing <- is.na(fathers) | fathers == ""
+
+  family_labels <- character(length(designations))
+
+  for (i in seq_along(designations)) {
+    m_miss <- mother_missing[i]
+    f_miss <- father_missing[i]
+
+    if (m_miss && f_miss) {
+      family_labels[i] <- "Founders / Unknown Family"
+    } else if (m_miss) {
+      family_labels[i] <- paste0(fathers[i], " \u00d7 Unknown")
+    } else if (f_miss) {
+      family_labels[i] <- paste0(mothers[i], " \u00d7 Unknown")
+    } else {
+      family_labels[i] <- paste0(mothers[i], " \u00d7 ", fathers[i])
+    }
+  }
+
+  names(family_labels) <- designations
+  family_labels
+}
+
+
+#' Build HTML tooltip for the relatedness plot
+#'
+#' Constructs an HTML tooltip string for a single individual in the
+#' relatedness plot hover display.
+#'
+#' @param designation Character scalar — individual identifier.
+#' @param family_or_cluster Character scalar — family or cluster label.
+#' @param plot_status Character scalar — current plot status (e.g. "SELECTED").
+#' @param index_value Numeric scalar — Selection Index value (may be NA).
+#' @param avg_relatedness Numeric scalar — average relatedness (may be NA).
+#' @param is_diversity_candidate Logical scalar — whether this is a diversity candidate.
+#'
+#' @return A character string containing the HTML tooltip.
+#'
+#' @export
+build_relatedness_tooltip <- function(designation, family_or_cluster, plot_status,
+                                      index_value, avg_relatedness, is_diversity_candidate) {
+  index_str <- if (is.na(index_value)) "N/A" else sprintf("%.2f", index_value)
+  rel_str <- if (is.na(avg_relatedness)) "N/A" else sprintf("%.3f", avg_relatedness)
+
+  tooltip <- paste0(
+    "<b>", designation, "</b><br>",
+    "Family/Cluster: ", family_or_cluster, "<br>",
+    "Status: ", plot_status, "<br>",
+    "Selection Index: ", index_str, "<br>",
+    "Avg. Relatedness: ", rel_str
+  )
+
+  if (isTRUE(is_diversity_candidate)) {
+    tooltip <- paste0(tooltip, "<br>\u2605 Diversity candidate")
+  }
+
+  tooltip
+}
 
 
 
@@ -1668,3 +2110,463 @@ buildProdAdvPerformanceProfile <- function(
 
 
 
+
+
+
+#' Compute summary bar text for the relatedness plot
+#'
+#' Returns a formatted character string summarizing the selected count, families
+#' in the selected set, total families displayed, diversity candidates, and mode.
+#'
+#' @param selected_count Integer scalar — number of selected individuals.
+#' @param selected_family_count Integer scalar — number of families represented in the selected set.
+#' @param group_count Integer scalar — total number of families or clusters displayed.
+#' @param diversity_count Integer scalar — number of diversity candidates identified.
+#' @param mode_string Character scalar — the operating mode label.
+#'
+#' @return A formatted character string for the summary bar display.
+#' @export
+compute_summary_bar <- function(selected_count, selected_family_count, group_count, diversity_count, mode_string) {
+  group_label <- if (grepl("genomic-only", mode_string, fixed = TRUE)) {
+    "clusters"
+  } else {
+    "families"
+  }
+
+  paste0(
+    selected_count, " selected (", selected_family_count, " ", group_label, ") | ",
+    group_count, " total ", group_label, " | ",
+    diversity_count, " diversity candidates | ",
+    mode_string, " mode"
+  )
+}
+
+#' Normalize trait values by direction so higher is always better
+#'
+#' For traits where the breeding goal is to increase the value, the original
+#' values are returned unchanged. For traits where the goal is to decrease,
+#' the values are negated so that higher normalized values still represent
+#' better performance.
+#'
+#' @param values Numeric vector of trait values.
+#' @param direction Character, either "increase" or "decrease".
+#'
+#' @return Numeric vector of the same length as \code{values}. Unchanged when
+#'   \code{direction} is "increase"; negated when \code{direction} is "decrease".
+#'
+#' @export
+normalize_trait_direction <- function(values, direction) {
+  if (direction == "decrease") {
+    return(-values)
+  }
+  values
+}
+
+#' Compute Genomic Relationship Matrix (GRM) from a genlight object
+#'
+#' Extracts the marker dosage matrix from a genlight object, column-mean centers
+#' it, and computes the realized genomic relationship matrix as
+#' \code{tcrossprod(M_centered) / ncol(M_centered)}.
+#'
+#' @param genlight_obj A genlight object (from the adegenet package) containing
+#'   marker dosage data for a set of individuals.
+#'
+#' @return A symmetric numeric matrix of dimension n x n (where n is the number
+#'   of individuals in the genlight object). Row and column names correspond to
+#'   the individual names from the genlight object.
+#'
+#' @export
+compute_grm <- function(genlight_obj) {
+  # Extract marker dosage matrix; missing values replaced by column means
+
+  M <- adegenet::tab(genlight_obj, NA.method = "mean")
+
+  # Column-mean center the marker matrix
+  col_means <- colMeans(M, na.rm = TRUE)
+  M_centered <- sweep(M, 2, col_means, "-")
+
+  # Compute GRM = M_centered %*% t(M_centered) / p, where p = number of markers
+  GRM <- tcrossprod(M_centered) / ncol(M_centered)
+
+  return(GRM)
+}
+
+#' Compute the Additive Relationship Matrix (A-matrix) from pedigree data
+#'
+#' Wraps \code{cgiarBase::nrm2()} using pedigree metadata column mappings
+#' from the phenoDTfile object. Extracts the designation, mother, and father
+#' column names from \code{phenoDTfile$metadata$pedigree} and passes them
+#' along with the pedigree data frame to \code{nrm2()}.
+#'
+#' @param phenoDTfile A list object containing at minimum:
+#'   \itemize{
+#'     \item \code{data$pedigree}: A data frame with pedigree records.
+#'     \item \code{metadata$pedigree}: A data frame with columns \code{parameter}
+#'       and \code{value}, mapping "designation", "mother", and "father" to
+#'       actual column names in the pedigree data frame.
+#'   }
+#'
+#' @return A symmetric numeric matrix (the numerator relationship matrix) with
+#'   row and column names set to the designation identifiers.
+#'
+#' @export
+compute_a_matrix <- function(phenoDTfile) {
+  paramsPed <- phenoDTfile$metadata$pedigree
+  
+  indivCol <- paramsPed[paramsPed$parameter == "designation", "value"]
+  damCol <- paramsPed[paramsPed$parameter == "mother", "value"]
+  sireCol <- paramsPed[paramsPed$parameter == "father", "value"]
+  
+  # Guard against missing metadata mappings
+
+  if (length(indivCol) == 0 || length(damCol) == 0 || length(sireCol) == 0) {
+    stop("Pedigree metadata mapping incomplete. Required: designation, mother, father.")
+  }
+  indivCol <- indivCol[1]
+  damCol <- damCol[1]
+  sireCol <- sireCol[1]
+
+  N <- cgiarBase::nrm2(
+    pedData = phenoDTfile$data$pedigree,
+    indivCol = indivCol,
+    damCol = damCol,
+    sireCol = sireCol
+  )
+
+  return(N)
+}
+
+#' Classify non-selected individuals as diversity candidates
+#'
+#' A non-selected individual qualifies as a diversity candidate when:
+#' \enumerate{
+#'   \item Its Selection_Index (\code{index_value}) exceeds the 40th percentile
+#'     of index values among the selected set.
+#'   \item Its average relatedness to the selected set is below the median of
+#'     pairwise relatedness coefficients among selected individuals.
+#' }
+#'
+#' If fewer than 2 individuals are in \code{selected_set}, classification is
+#' skipped and an empty character vector is returned. Individuals with missing
+#' \code{index_value} or not found in the \code{similarity_matrix} are excluded.
+#'
+#' @param candidates_df A data.frame with at least columns \code{designation}
+#'   (character) and \code{index_value} (numeric, i.e., the Selection_Index).
+#' @param similarity_matrix A named symmetric matrix (A-matrix or GRM) with
+#'   row and column names corresponding to designations.
+#' @param selected_set Character vector of designations that are currently selected.
+#'
+#' @return Character vector of designations classified as diversity candidates.
+#'
+#' @export
+classify_diversity_candidates <- function(candidates_df, similarity_matrix, selected_set) {
+  # Guard: skip classification if fewer than 2 selected individuals
+
+  if (length(selected_set) < 2) {
+    return(character(0))
+  }
+
+  # Identify non-selected individuals from candidates_df
+  non_selected_df <- candidates_df[!(candidates_df$designation %in% selected_set), , drop = FALSE]
+
+  # Compute the 40th percentile of index_value among selected individuals
+  selected_df <- candidates_df[candidates_df$designation %in% selected_set, , drop = FALSE]
+  selected_index_values <- selected_df$index_value
+  # Remove NAs from selected index values for percentile computation
+
+  selected_index_values <- selected_index_values[!is.na(selected_index_values)]
+  if (length(selected_index_values) == 0) {
+    return(character(0))
+  }
+  index_threshold <- as.numeric(stats::quantile(selected_index_values, probs = 0.40))
+
+  # Compute median of pairwise relatedness among selected individuals
+
+  # Use only selected individuals present in the similarity matrix
+  selected_in_matrix <- intersect(selected_set, rownames(similarity_matrix))
+  if (length(selected_in_matrix) < 2) {
+    return(character(0))
+  }
+
+  selected_submatrix <- similarity_matrix[selected_in_matrix, selected_in_matrix, drop = FALSE]
+  # Extract upper triangle (pairwise relatedness among selected)
+  pairwise_values <- selected_submatrix[upper.tri(selected_submatrix)]
+  relatedness_threshold <- stats::median(pairwise_values, na.rm = TRUE)
+
+  # Evaluate each non-selected individual
+  diversity_candidates <- character(0)
+
+  for (i in seq_len(nrow(non_selected_df))) {
+    desig <- as.character(non_selected_df$designation[i])
+    idx_val <- non_selected_df$index_value[i]
+
+    # Exclude if missing index_value
+    if (is.na(idx_val)) {
+      next
+    }
+
+    # Exclude if not found in similarity_matrix
+    if (!(desig %in% rownames(similarity_matrix))) {
+      next
+    }
+
+    # Check condition (a): index_value > 40th percentile of selected
+    if (idx_val <= index_threshold) {
+      next
+    }
+
+    # Check condition (b): average relatedness to selected set < median pairwise among selected
+    relatedness_to_selected <- similarity_matrix[desig, selected_in_matrix]
+    avg_relatedness <- mean(relatedness_to_selected, na.rm = TRUE)
+
+    if (avg_relatedness < relatedness_threshold) {
+      diversity_candidates <- c(diversity_candidates, desig)
+    }
+  }
+
+  diversity_candidates
+}
+
+
+#' Find top X unrelated non-selected individuals
+#'
+#' Identifies top X non-selected individuals meeting relatedness criteria,
+#' operating in either pedigree or genomic mode.
+#'
+#' In pedigree mode: finds individuals from families with zero selected members,
+#' sorted by descending index_value.
+#'
+#' In genomic mode: finds individuals whose average GRM coefficient to the
+#' selected set is below the median of pairwise GRM coefficients among selected
+#' individuals, sorted by descending index_value.
+#'
+#' @param candidates_df data.frame with columns: designation, index_value,
+#'   and family (family only required for pedigree mode).
+#' @param similarity_matrix Named symmetric matrix (A-matrix or GRM) with
+#'   row and column names as designations.
+#' @param selected_set Character vector of selected designations.
+#' @param x Integer, number of individuals to return (0-20).
+#' @param mode Character, either "pedigree" or "genomic".
+#'
+#' @return A data.frame of qualifying individuals ranked by descending
+#'   index_value. Contains at minimum columns: designation, index_value
+#'   (and family for pedigree mode). Returns empty data.frame if x = 0
+#'   or no candidates qualify.
+#'
+#' @export
+find_top_x_unrelated <- function(candidates_df, similarity_matrix, selected_set, x, mode) {
+
+
+  # If x is 0, return empty data.frame immediately
+  if (x == 0) {
+    if (mode == "pedigree") {
+      return(data.frame(designation = character(0),
+                        index_value = numeric(0),
+                        family = character(0),
+                        stringsAsFactors = FALSE))
+    } else {
+      return(data.frame(designation = character(0),
+                        index_value = numeric(0),
+                        stringsAsFactors = FALSE))
+    }
+  }
+
+  # Identify non-selected individuals
+  non_selected_df <- candidates_df[!(candidates_df$designation %in% selected_set), , drop = FALSE]
+
+  if (nrow(non_selected_df) == 0) {
+    if (mode == "pedigree") {
+      return(data.frame(designation = character(0),
+                        index_value = numeric(0),
+                        family = character(0),
+                        stringsAsFactors = FALSE))
+    } else {
+      return(data.frame(designation = character(0),
+                        index_value = numeric(0),
+                        stringsAsFactors = FALSE))
+    }
+  }
+
+  if (mode == "pedigree") {
+    # --- Pedigree mode ---
+    # Get families of selected individuals
+    selected_df <- candidates_df[candidates_df$designation %in% selected_set, , drop = FALSE]
+    selected_families <- unique(selected_df$family)
+
+    # Find non-selected individuals from families NOT represented in the selected set
+    qualifying <- non_selected_df[!(non_selected_df$family %in% selected_families), , drop = FALSE]
+
+    # Remove rows with NA index_value
+    qualifying <- qualifying[!is.na(qualifying$index_value), , drop = FALSE]
+
+    if (nrow(qualifying) == 0) {
+      return(data.frame(designation = character(0),
+                        index_value = numeric(0),
+                        family = character(0),
+                        stringsAsFactors = FALSE))
+    }
+
+    # Return top X per unrepresented family (not X total)
+    # For each unrepresented family, take the top X by descending index_value
+    result_list <- lapply(split(qualifying, qualifying$family), function(fam_df) {
+      fam_df <- fam_df[order(fam_df$index_value, decreasing = TRUE), , drop = FALSE]
+      head(fam_df, x)
+    })
+    result <- do.call(rbind, result_list)
+
+    if (is.null(result) || nrow(result) == 0) {
+      return(data.frame(designation = character(0),
+                        index_value = numeric(0),
+                        family = character(0),
+                        stringsAsFactors = FALSE))
+    }
+
+    # Sort overall by descending index_value
+    result <- result[order(result$index_value, decreasing = TRUE), , drop = FALSE]
+
+    # Ensure at minimum the required columns are present
+    result <- result[, intersect(c("designation", "index_value", "family"), colnames(result)), drop = FALSE]
+    rownames(result) <- NULL
+    return(result)
+
+  } else {
+    # --- Genomic mode ---
+    # Use only selected individuals present in the similarity matrix
+    selected_in_matrix <- intersect(selected_set, rownames(similarity_matrix))
+
+    if (length(selected_in_matrix) < 2) {
+      # Cannot compute median pairwise if fewer than 2 selected in matrix
+      return(data.frame(designation = character(0),
+                        index_value = numeric(0),
+                        stringsAsFactors = FALSE))
+    }
+
+    # Compute the median of pairwise relatedness among selected (upper triangle)
+    selected_submatrix <- similarity_matrix[selected_in_matrix, selected_in_matrix, drop = FALSE]
+    pairwise_values <- selected_submatrix[upper.tri(selected_submatrix)]
+    median_pairwise <- stats::median(pairwise_values, na.rm = TRUE)
+
+    # Evaluate each non-selected individual present in the similarity matrix
+    qualifying_rows <- list()
+
+    for (i in seq_len(nrow(non_selected_df))) {
+      desig <- as.character(non_selected_df$designation[i])
+      idx_val <- non_selected_df$index_value[i]
+
+      # Skip if missing index_value
+      if (is.na(idx_val)) next
+
+      # Skip if not present in similarity matrix
+      if (!(desig %in% rownames(similarity_matrix))) next
+
+      # Compute average GRM coefficient to all selected individuals present in matrix
+      relatedness_to_selected <- similarity_matrix[desig, selected_in_matrix]
+      avg_relatedness <- mean(relatedness_to_selected, na.rm = TRUE)
+
+      # Keep only those with average relatedness < median pairwise among selected
+      if (avg_relatedness < median_pairwise) {
+        qualifying_rows[[length(qualifying_rows) + 1]] <- data.frame(
+          designation = desig,
+          index_value = idx_val,
+          stringsAsFactors = FALSE
+        )
+      }
+    }
+
+    if (length(qualifying_rows) == 0) {
+      return(data.frame(designation = character(0),
+                        index_value = numeric(0),
+                        stringsAsFactors = FALSE))
+    }
+
+    qualifying <- do.call(rbind, qualifying_rows)
+
+    # Sort by descending index_value
+    qualifying <- qualifying[order(qualifying$index_value, decreasing = TRUE), , drop = FALSE]
+
+    # Return the top X (or fewer if not enough qualify)
+    n_return <- min(x, nrow(qualifying))
+    result <- qualifying[seq_len(n_return), , drop = FALSE]
+    rownames(result) <- NULL
+    return(result)
+  }
+}
+
+
+#' Cluster selected individuals using genomic relationship matrix
+#'
+#' Performs hierarchical clustering on the GRM for genomic-only mode.
+#' Subsets the GRM to selected individuals, computes distances as 1 - GRM,
+#' clusters with average linkage, and cuts at the median pairwise GRM value.
+#' Within each cluster, individuals are ordered by descending Selection_Index.
+#'
+#' @param grm A named symmetric matrix (genomic relationship matrix).
+#' @param selected_designations Character vector of selected individual names.
+#' @param index_values Named numeric vector where names are designations and values
+#'   are Selection_Index scores.
+#'
+#' @return A list with:
+#'   \describe{
+#'     \item{clusters}{Named integer vector where names are designations and values
+#'       are cluster IDs, ordered within each cluster by descending index.}
+#'     \item{dendrogram}{The hclust object, or NULL if fewer than 2 individuals present.}
+#'     \item{missing}{Character vector of selected designations not found in GRM.}
+#'   }
+#'
+#' @export
+cluster_genomic_only <- function(grm, selected_designations, index_values) {
+  # 1. Subset GRM to only those selected designations present in rownames(grm)
+  present <- selected_designations[selected_designations %in% rownames(grm)]
+  missing_desig <- selected_designations[!(selected_designations %in% rownames(grm))]
+
+  # 2. If fewer than 2 selected are present in GRM, return early
+
+  if (length(present) < 2) {
+    empty_clusters <- integer(0)
+    names(empty_clusters) <- character(0)
+    return(list(clusters = empty_clusters, dendrogram = NULL, missing = missing_desig))
+  }
+
+  # Subset the GRM
+  grm_subset <- grm[present, present, drop = FALSE]
+
+  # 3. Convert GRM subset to distance: dist_mat = 1 - grm_subset (clamp negatives to 0)
+  dist_values <- 1 - grm_subset
+  dist_values[dist_values < 0] <- 0
+  dist_mat <- stats::as.dist(dist_values)
+
+  # 4. Hierarchical clustering with average linkage
+  hc <- stats::hclust(dist_mat, method = "average")
+
+  # 5. Compute median of pairwise GRM values among selected (upper triangle)
+  pairwise_grm <- grm_subset[upper.tri(grm_subset)]
+  median_grm <- stats::median(pairwise_grm, na.rm = TRUE)
+
+  # 6. Cut the dendrogram at height = 1 - median_grm (distance space)
+  cut_height <- 1 - median_grm
+  clusters <- stats::cutree(hc, h = cut_height)
+
+  # 7. Within each cluster, order individuals by descending index_values
+  # Build a data.frame for ordering
+  cluster_df <- data.frame(
+    designation = names(clusters),
+    cluster_id = as.integer(clusters),
+    stringsAsFactors = FALSE
+  )
+
+  # Match index values to designations
+  cluster_df$index_val <- index_values[cluster_df$designation]
+  # For any missing index value, use -Inf so they sort last
+
+  cluster_df$index_val[is.na(cluster_df$index_val)] <- -Inf
+
+  # Order: first by cluster_id ascending, then by index_val descending
+  cluster_df <- cluster_df[order(cluster_df$cluster_id, -cluster_df$index_val), ]
+
+  # Build the named integer vector result (ordered within clusters by descending index)
+  ordered_clusters <- cluster_df$cluster_id
+  names(ordered_clusters) <- cluster_df$designation
+
+  # 8. Return
+  list(clusters = ordered_clusters, dendrogram = hc, missing = missing_desig)
+}

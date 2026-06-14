@@ -10,14 +10,26 @@ export(
 
        # --- ProdAdv (pam_selection.R) ---
        runInitialProdAdv,
+       checkTraitQuality,
        savePlotProdAdvSelection,
+       saveFinalProdAdvSelection,
        build_prodadv_decision_table_data,
        build_prodadv_review_plot_data,
        idw_surface,
        get_tpe_basemap,
        sf_to_plotly_polygons,
        build_tpe_mask,
-       buildProdAdvPerformanceProfile
+       buildProdAdvPerformanceProfile,
+       detect_relatedness_mode,
+       assign_families,
+       compute_a_matrix,
+       compute_grm,
+       cluster_genomic_only,
+       find_top_x_unrelated,
+       classify_diversity_candidates,
+       normalize_trait_direction,
+       build_relatedness_tooltip,
+       compute_summary_bar
 )
 
 
