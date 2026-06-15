@@ -1400,7 +1400,7 @@ build_prodadv_decision_table_data <- function(dt,
   }
   
   modeling_init <- dt$modeling[
-    dt$modeling$analysisId %in% initial_stamp &
+    as.character(dt$modeling$analysisId) %in% as.character(initial_stamp) &
       dt$modeling$module == "Init_prodAdv",
     ,
     drop = FALSE
@@ -1566,7 +1566,7 @@ build_prodadv_decision_table_data <- function(dt,
       table_stamp != "__none__") {
 
     table_manual <- dt$modifications$selection[
-      dt$modifications$selection$analysisId %in% table_stamp &
+      as.character(dt$modifications$selection$analysisId) %in% as.character(table_stamp) &
         dt$modifications$selection$module == "Table_prodAdv" &
         dt$modifications$selection$reason == "manual_table_selection",
       ,
