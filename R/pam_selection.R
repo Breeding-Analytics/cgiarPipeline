@@ -14,6 +14,523 @@ coalesce_chr <- function(...) {
 }
 
 
+#' Assess selection quality before running initial selection
+#'
+#' Computes per-trait reliability metrics and boundary separability,
+#' returning an integrated recommendation for each trait. Called by the
+#' Assessment Modal UI before executing `runInitialProdAdv()`.
+#'
+#' @param args List — same structure as `initial_selection_args()` reactive
+#'   output. Must contain: `mtaStamp`, `traitsToEvaluate`, `customWeights`,
+#'   `selectedCandidates`, `checkEntryTypeValue`, selection parameters
+#'   (`topPctSelected` or `nSelected`).
+#' @param dt_object The Bioflow data object with `$predictions` data frame.
+#' @return A list with `trait_assessments` data frame, `selection_intensity`,
+#'   `n_selected`, `n_total_candidates`, and `boundary_stats`.
+#' @export
+assessSelectionQuality <- function(args, dt_object) {
+
+
+  # ---- Extract check entry type value (same pattern as checkTraitQuality) ----
+  check_entry_type_value <- args$checkEntryTypeValue
+  if (is.null(check_entry_type_value) || !nzchar(check_entry_type_value)) {
+    check_entry_type_value <- NULL
+  }
+
+  # ---- Filter MTA predictions (same pattern as checkTraitQuality) ----
+  preds <- dt_object$predictions
+  mta_preds <- preds[preds$analysisId == args$mtaStamp & preds$effectType == "designation", ]
+  mta_preds <- mta_preds[mta_preds$trait %in% args$traitsToEvaluate, ]
+
+  # ---- Deduplicate (same as checkTraitQuality / runInitialProdAdv) ----
+  dup_key <- paste(mta_preds$designation, mta_preds$trait, sep = "|||")
+  if (any(duplicated(dup_key))) {
+    agg_cols <- c("predictedValue")
+    if ("reliability" %in% colnames(mta_preds)) agg_cols <- c(agg_cols, "reliability")
+    if ("stdError" %in% colnames(mta_preds)) agg_cols <- c(agg_cols, "stdError")
+    mta_preds <- do.call(rbind, lapply(split(mta_preds, dup_key), function(x) {
+      row1 <- x[1, , drop = FALSE]
+      for (col in agg_cols) {
+        if (col %in% colnames(x)) row1[[col]] <- mean(x[[col]], na.rm = TRUE)
+      }
+      row1
+    }))
+    rownames(mta_preds) <- NULL
+  }
+
+  # ---- Filter to candidates only (same as checkTraitQuality) ----
+  if (!is.null(args$selectedCandidates)) {
+    if (is.null(check_entry_type_value)) {
+      mta_preds <- mta_preds[mta_preds$designation %in% args$selectedCandidates, ]
+    } else {
+      mta_preds <- mta_preds[
+        mta_preds$designation %in% args$selectedCandidates |
+          mta_preds$entryType == check_entry_type_value, ]
+    }
+  }
+
+  # Separate candidates from checks
+  if (is.null(check_entry_type_value)) {
+    candidate_preds <- mta_preds
+  } else {
+    candidate_preds <- mta_preds[mta_preds$entryType != check_entry_type_value, ]
+  }
+
+  # ---- Determine selection counts ----
+  n_total_candidates <- length(unique(candidate_preds$designation))
+
+  if (!is.null(args$nSelected) && args$nSelected > 0) {
+    n_selected <- min(args$nSelected, n_total_candidates)
+  } else {
+    top_pct <- if (!is.null(args$topPctSelected)) args$topPctSelected else 20
+    n_selected <- as.integer(n_total_candidates * (top_pct / 100))
+  }
+  n_selected <- max(c(1L, n_selected))
+
+  # Selection intensity: % of candidates selected, rounded to 1 decimal
+
+  selection_intensity <- if (n_total_candidates > 0) {
+    round((n_selected / n_total_candidates) * 100, 1)
+  } else {
+    0
+  }
+
+  # ---- Compute per-trait reliability metrics ----
+  has_reliability <- "reliability" %in% colnames(candidate_preds)
+  has_std_error <- "stdError" %in% colnames(candidate_preds)
+
+  trait_assessments <- data.frame(
+    trait = character(0),
+    rsr = numeric(0),
+    mean_reliability = numeric(0),
+    pct_low_reliability = numeric(0),
+    reliability_class = character(0),
+    boundary_separability = character(0),
+    integrated_recommendation = character(0),
+    justification = character(0),
+    default_keep = logical(0),
+    insufficient_data = logical(0),
+    stringsAsFactors = FALSE
+  )
+
+  for (t in args$traitsToEvaluate) {
+    trait_cand <- candidate_preds[candidate_preds$trait == t, ]
+
+    # Filter non-finite predicted values
+    valid_blup_idx <- which(is.finite(trait_cand$predictedValue))
+    trait_cand_valid <- trait_cand[valid_blup_idx, , drop = FALSE]
+
+    n_valid <- nrow(trait_cand_valid)
+
+    # Check insufficient data condition (< 3 candidates with non-missing BLUPs)
+    if (n_valid < 3) {
+      row <- data.frame(
+        trait = t,
+        rsr = NA_real_,
+        mean_reliability = NA_real_,
+        pct_low_reliability = NA_real_,
+        reliability_class = NA_character_,
+        boundary_separability = NA_character_,
+        integrated_recommendation = NA_character_,
+        justification = NA_character_,
+        default_keep = TRUE,
+        insufficient_data = TRUE,
+        stringsAsFactors = FALSE
+      )
+      trait_assessments <- rbind(trait_assessments, row)
+      next
+    }
+
+    # ---- Compute RSR ----
+    blups <- trait_cand_valid$predictedValue
+    rsr_value <- NA_real_
+    insuff_due_to_se <- FALSE
+
+    if (has_std_error) {
+      ses <- trait_cand_valid$stdError
+      # Filter non-finite SEs
+      finite_se_idx <- which(is.finite(ses))
+      ses_finite <- ses[finite_se_idx]
+
+      if (length(ses_finite) > 0) {
+        mean_se <- mean(ses_finite)
+        if (mean_se == 0) {
+          # Division by zero: flag as insufficient data
+          insuff_due_to_se <- TRUE
+        } else {
+          rsr_value <- sd(blups) / mean_se
+        }
+      }
+    }
+
+    # If division by zero in SE, flag trait as insufficient
+    if (insuff_due_to_se) {
+      row <- data.frame(
+        trait = t,
+        rsr = NA_real_,
+        mean_reliability = NA_real_,
+        pct_low_reliability = NA_real_,
+        reliability_class = NA_character_,
+        boundary_separability = NA_character_,
+        integrated_recommendation = NA_character_,
+        justification = NA_character_,
+        default_keep = TRUE,
+        insufficient_data = TRUE,
+        stringsAsFactors = FALSE
+      )
+      trait_assessments <- rbind(trait_assessments, row)
+      next
+    }
+
+    # ---- Compute reliability metrics ----
+    mean_rel <- NA_real_
+    pct_low_rel <- NA_real_
+
+    if (has_reliability) {
+      rel_vals <- trait_cand_valid$reliability
+      # Filter non-finite reliability values
+      finite_rel_idx <- which(is.finite(rel_vals))
+      rel_vals_finite <- rel_vals[finite_rel_idx]
+
+      if (length(rel_vals_finite) > 0) {
+        mean_rel <- mean(rel_vals_finite)
+        pct_low_rel <- mean(rel_vals_finite < 0.20)
+      }
+    }
+
+    # ---- Reliability class (Task 1.2) ----
+    if (!has_reliability) {
+      # No reliability column: classify solely on RSR
+      if (is.na(rsr_value)) {
+        # No RSR either (no stdError column) — cannot classify
+        reliability_class <- NA_character_
+      } else if (rsr_value >= 1) {
+        reliability_class <- "High reliability"
+      } else if (rsr_value >= 0.5) {
+        reliability_class <- "Moderate reliability"
+      } else {
+        reliability_class <- "Low reliability"
+      }
+    } else if (is.na(rsr_value)) {
+      # RSR unavailable but reliability IS available: classify on reliability alone
+      if (!is.na(mean_rel) && !is.na(pct_low_rel)) {
+        if (mean_rel >= 0.40 && pct_low_rel < 0.30) {
+          reliability_class <- "High reliability"
+        } else if (mean_rel >= 0.20 || pct_low_rel <= 0.60) {
+          reliability_class <- "Moderate reliability"
+        } else {
+          reliability_class <- "Low reliability"
+        }
+      } else {
+        reliability_class <- NA_character_
+      }
+    } else {
+      # Both RSR and reliability available: full classification
+      if (rsr_value >= 1 && mean_rel >= 0.40 && pct_low_rel < 0.30) {
+        reliability_class <- "High reliability"
+      } else if ((rsr_value < 1 && mean_rel < 0.20) || pct_low_rel > 0.60) {
+        reliability_class <- "Low reliability"
+      } else {
+        reliability_class <- "Moderate reliability"
+      }
+    }
+
+    # ---- Boundary separability — assigned after boundary computation (Task 1.4) ----
+    boundary_separability <- NA_character_  # will be filled after boundary block
+
+    # ---- Integrated recommendation — filled post-loop in Task 1.5 block ----
+    integrated_recommendation <- NA_character_
+    justification <- NA_character_
+    default_keep <- TRUE
+
+    # ---- Assemble trait row ----
+    row <- data.frame(
+      trait = t,
+      rsr = rsr_value,
+      mean_reliability = mean_rel,
+      pct_low_reliability = pct_low_rel,
+      reliability_class = reliability_class,
+      boundary_separability = boundary_separability,
+      integrated_recommendation = integrated_recommendation,
+      justification = justification,
+      default_keep = default_keep,
+      insufficient_data = FALSE,
+      stringsAsFactors = FALSE
+    )
+    trait_assessments <- rbind(trait_assessments, row)
+  }
+
+  # ---- Boundary separability computation (Task 1.3) ----
+  # Compute selection index per designation: I_i = sum(w_k * BLUP_ik)
+  # Compute index SE per designation: SE(I_i) = sqrt(sum(w_k^2 * SE_ik^2))
+
+  # Get trait weights (default to equal weights if NULL/missing)
+  trait_weights <- args$customWeights[args$traitsToEvaluate]
+  if (is.null(trait_weights) || length(trait_weights) == 0) {
+    trait_weights <- rep(1, length(args$traitsToEvaluate))
+    names(trait_weights) <- args$traitsToEvaluate
+  }
+  # Ensure weights vector matches traitsToEvaluate length
+  if (length(trait_weights) != length(args$traitsToEvaluate)) {
+    trait_weights <- rep(1, length(args$traitsToEvaluate))
+    names(trait_weights) <- args$traitsToEvaluate
+  }
+
+  # Build BLUP matrix and SE matrix (designations x traits) from candidate_preds
+  all_cand_designations <- unique(candidate_preds$designation)
+  n_cand <- length(all_cand_designations)
+
+  blup_matrix <- matrix(NA_real_, nrow = n_cand, ncol = length(args$traitsToEvaluate))
+  rownames(blup_matrix) <- all_cand_designations
+  colnames(blup_matrix) <- args$traitsToEvaluate
+
+  se_matrix <- matrix(NA_real_, nrow = n_cand, ncol = length(args$traitsToEvaluate))
+  rownames(se_matrix) <- all_cand_designations
+  colnames(se_matrix) <- args$traitsToEvaluate
+
+  for (t in args$traitsToEvaluate) {
+    t_data <- candidate_preds[candidate_preds$trait == t, ]
+    match_idx <- match(all_cand_designations, t_data$designation)
+    blup_matrix[, t] <- t_data$predictedValue[match_idx]
+    if (has_std_error) {
+      se_matrix[, t] <- t_data$stdError[match_idx]
+    }
+  }
+
+  # Replace NA BLUPs with 0 for index computation
+  blup_matrix_filled <- blup_matrix
+  blup_matrix_filled[is.na(blup_matrix_filled)] <- 0
+
+  # Compute selection index: I_i = sum(w_k * BLUP_ik)
+  w_vec <- as.numeric(trait_weights)
+  index_values <- as.numeric(blup_matrix_filled %*% w_vec)
+  names(index_values) <- all_cand_designations
+
+  # Compute index SE: SE(I_i) = sqrt(sum(w_k^2 * SE_ik^2))
+  # Replace NA SEs with 0 for computation
+  se_matrix_filled <- se_matrix
+  se_matrix_filled[is.na(se_matrix_filled)] <- 0
+
+  index_se_values <- sqrt(as.numeric((se_matrix_filled^2) %*% (w_vec^2)))
+  names(index_se_values) <- all_cand_designations
+
+  # Initialize boundary stats with defaults (non-separable)
+  boundary_stats <- list(
+    median_z = NA_real_,
+    pct_below_2 = NA_real_,
+    n_pairs = 0L
+  )
+
+  # Store boundary window designations for Task 1.4
+
+  boundary_window_designations <- character(0)
+
+  # Only compute boundary if we have stdError and more than 1 candidate
+
+  if (has_std_error && n_cand > 1) {
+
+    # Rank designations by index value (descending)
+    rank_order <- order(index_values, decreasing = TRUE)
+    ranked_designations <- all_cand_designations[rank_order]
+
+    # Define boundary window: up to 5 above cutoff + up to 5 below cutoff
+    # "Above cutoff" = ranks (n_selected - 4) through n_selected (last 5 selected)
+    # "Below cutoff" = ranks (n_selected + 1) through (n_selected + 5) (first 5 rejected)
+    above_start <- max(1L, n_selected - 4L)
+    above_end <- min(n_selected, n_cand)
+    below_start <- n_selected + 1L
+    below_end <- min(n_selected + 5L, n_cand)
+
+    above_window <- if (above_start <= above_end) {
+      ranked_designations[above_start:above_end]
+    } else {
+      character(0)
+    }
+
+    below_window <- if (below_start <= below_end) {
+      ranked_designations[below_start:below_end]
+    } else {
+      character(0)
+    }
+
+    boundary_window_designations <- c(above_window, below_window)
+
+    # Compute pairwise z_ij for all (i in above, j in below) pairs
+    z_values <- numeric(0)
+
+    if (length(above_window) > 0 && length(below_window) > 0) {
+      for (i_des in above_window) {
+        for (j_des in below_window) {
+          se_i <- index_se_values[i_des]
+          se_j <- index_se_values[j_des]
+          sed_ij <- sqrt(se_i^2 + se_j^2)
+
+          # Skip pairs where SED_ij = 0
+          if (is.na(sed_ij) || sed_ij == 0) next
+
+          idx_i <- index_values[i_des]
+          idx_j <- index_values[j_des]
+          z_ij <- (idx_i - idx_j) / sed_ij
+
+          z_values <- c(z_values, z_ij)
+        }
+      }
+    }
+
+    # Populate boundary_stats
+    if (length(z_values) > 0) {
+      boundary_stats <- list(
+        median_z = median(z_values),
+        pct_below_2 = mean(z_values < 2),
+        n_pairs = as.integer(length(z_values))
+      )
+    }
+    # else: boundary_stats remains as default (NA, NA, 0L)
+  }
+
+  # ---- Per-trait boundary separability classification (Task 1.4) ----
+  # After boundary computation, fill in boundary_separability for each trait
+  if (nrow(trait_assessments) > 0) {
+    for (i in seq_len(nrow(trait_assessments))) {
+      # Traits with insufficient_data always get "Non-separable boundary"
+      if (isTRUE(trait_assessments$insufficient_data[i])) {
+        trait_assessments$boundary_separability[i] <- "Non-separable boundary"
+        next
+      }
+
+      t_name <- trait_assessments$trait[i]
+
+      # Determine per-trait classification (PRIMARY approach per Requirement 3.7)
+      if (length(boundary_window_designations) > 0 && has_reliability) {
+        # Get reliability values for boundary-window designations on this trait
+        bw_trait_data <- candidate_preds[
+          candidate_preds$designation %in% boundary_window_designations &
+            candidate_preds$trait == t_name, ]
+        bw_rel_vals <- bw_trait_data$reliability
+        # Keep only finite values
+        bw_rel_finite <- bw_rel_vals[is.finite(bw_rel_vals)]
+
+        if (length(bw_rel_finite) > 0) {
+          mean_bw_rel <- mean(bw_rel_finite)
+          if (mean_bw_rel >= 0.30) {
+            trait_assessments$boundary_separability[i] <- "Separable boundary"
+          } else {
+            trait_assessments$boundary_separability[i] <- "Non-separable boundary"
+          }
+        } else {
+          # No finite reliability values for boundary window on this trait
+          trait_assessments$boundary_separability[i] <- "Non-separable boundary"
+        }
+      } else {
+        # Fallback to global classification from boundary_stats
+        if (boundary_stats$n_pairs == 0 || is.na(boundary_stats$median_z)) {
+          trait_assessments$boundary_separability[i] <- "Non-separable boundary"
+        } else if (boundary_stats$median_z >= 2 && boundary_stats$pct_below_2 <= 0.50) {
+          trait_assessments$boundary_separability[i] <- "Separable boundary"
+        } else {
+          trait_assessments$boundary_separability[i] <- "Non-separable boundary"
+        }
+      }
+    }
+  }
+
+  # ---- Integrated recommendation 2D mapping (Task 1.5) ----
+  # Map (reliability_class, boundary_separability) to integrated_recommendation,
+
+  # justification, and default_keep for each trait.
+  if (nrow(trait_assessments) > 0) {
+    for (i in seq_len(nrow(trait_assessments))) {
+      # Special case: insufficient_data → always "Recommended to exclude"
+      if (isTRUE(trait_assessments$insufficient_data[i])) {
+        trait_assessments$integrated_recommendation[i] <- "Recommended to exclude"
+        trait_assessments$justification[i] <- "Insufficient data to assess ranking quality for this trait."
+        trait_assessments$default_keep[i] <- FALSE
+        next
+      }
+
+      rel_class <- trait_assessments$reliability_class[i]
+      bnd_sep <- trait_assessments$boundary_separability[i]
+
+      # If reliability_class is NA (couldn't classify), treat as "Low reliability" for safety
+      if (is.na(rel_class)) {
+        rel_class <- "Low reliability"
+      }
+
+      # Format selection intensity for justification strings
+      si_val <- selection_intensity
+
+      if (rel_class == "High reliability" && bnd_sep == "Separable boundary") {
+        trait_assessments$integrated_recommendation[i] <- "Recommended to keep"
+        trait_assessments$justification[i] <- paste0(
+          "Trait has good overall reliability and, with ", si_val,
+          "% of individuals selected, the entries around the selection boundary have sufficient index reliability for selection to be performed."
+        )
+        trait_assessments$default_keep[i] <- TRUE
+
+      } else if (rel_class == "High reliability" && bnd_sep == "Non-separable boundary") {
+        trait_assessments$integrated_recommendation[i] <- "Use with caution (boundary non-separable)"
+        trait_assessments$justification[i] <- paste0(
+          "Trait has good overall reliability but, with ", si_val,
+          "% of individuals selected, the entries around the selection boundary do not have enough index separability. Consider reviewing entries near the boundary."
+        )
+        trait_assessments$default_keep[i] <- TRUE
+
+      } else if (rel_class == "Moderate reliability" && bnd_sep == "Separable boundary") {
+        trait_assessments$integrated_recommendation[i] <- "Use with caution (boundary separable)"
+        trait_assessments$justification[i] <- paste0(
+          "Trait has moderate overall reliability but, with ", si_val,
+          "% of individuals selected, the entries around the selection boundary have enough index reliability for selection to be performed. Trait may be kept but user is advised to avoid overriding the index decision based on values for this trait alone."
+        )
+        trait_assessments$default_keep[i] <- TRUE
+
+      } else if (rel_class == "Moderate reliability" && bnd_sep == "Non-separable boundary") {
+        trait_assessments$integrated_recommendation[i] <- "Use with caution (boundary non-separable)"
+        trait_assessments$justification[i] <- paste0(
+          "Trait has moderate overall reliability and, with ", si_val,
+          "% of individuals selected, the entries around the selection boundary do not have enough index separability. User is advised to reduce the weight of this trait or exclude it."
+        )
+        trait_assessments$default_keep[i] <- TRUE
+
+      } else if (rel_class == "Low reliability" && bnd_sep == "Separable boundary") {
+        trait_assessments$integrated_recommendation[i] <- "Use with caution (boundary separable)"
+        trait_assessments$justification[i] <- paste0(
+          "Trait has low overall reliability but, with ", si_val,
+          "% of individuals selected, the entries around the selection boundary still have enough index reliability for selection to be performed. Trait may be kept but user is strongly advised to avoid overriding the index decision based on values for this trait alone."
+        )
+        trait_assessments$default_keep[i] <- TRUE
+
+      } else if (rel_class == "Low reliability" && bnd_sep == "Non-separable boundary") {
+        trait_assessments$integrated_recommendation[i] <- "Recommended to exclude"
+        trait_assessments$justification[i] <- paste0(
+          "Trait has low overall reliability and, with ", si_val,
+          "% of individuals selected, the entries around the selection boundary do not have enough index reliability for selection to be performed. User is strongly advised to remove this trait."
+        )
+        trait_assessments$default_keep[i] <- FALSE
+
+      } else {
+        # Fallback for unexpected combinations (defensive)
+        trait_assessments$integrated_recommendation[i] <- "Use with caution (boundary non-separable)"
+        trait_assessments$justification[i] <- paste0(
+          "Trait assessment could not be fully determined at ", si_val,
+          "% selection intensity. Use with caution."
+        )
+        trait_assessments$default_keep[i] <- TRUE
+      }
+    }
+  }
+
+  # ---- Return results ----
+  list(
+    trait_assessments = trait_assessments,
+    selection_intensity = selection_intensity,
+    n_selected = n_selected,
+    n_total_candidates = n_total_candidates,
+    boundary_stats = boundary_stats,
+    boundary_window_designations = boundary_window_designations
+  )
+}
+
+
 #' Check trait quality before running initial selection
 #'
 #' Returns a list of flagged traits with reasons. Called by UI to show
@@ -613,7 +1130,133 @@ savePlotProdAdvSelection <- function(
     dt_object$status,
     status
   )
-  
+
+  dt_object
+}
+
+
+#' Save table-based product advancement selection
+#'
+#' Persists table selection decisions with module "Table_prodAdv" and reason
+#' "manual_table_selection", distinct from plot-based selections.
+#'
+#' @param analysisId Numeric timestamp ID for this analysis (default: current time).
+#' @param analysisIdName Character string name for the analysis (optional).
+#' @param initialSelectionStamp Character ID of the initial selection stamp.
+#' @param tableSelectionStamp Character ID of a previous table selection stamp (optional).
+#' @param manual_decisions Data frame with columns: designation, table_decision.
+#' @param dt_object The data object list.
+#' @return Updated dt_object with new modifications and status rows.
+#' @export
+saveTableProdAdvSelection <- function(
+    analysisId = as.numeric(Sys.time()),
+    analysisIdName = NULL,
+    initialSelectionStamp,
+    tableSelectionStamp = NULL,
+    manual_decisions,
+    dt_object
+) {
+
+  if (!is.list(dt_object)) {
+    stop("'dt_object' must be a data object list.")
+  }
+
+  if (is.null(dt_object$modifications$selection)) {
+    stop("No existing selection modifications table found in dt_object.")
+  }
+
+  if (is.null(dt_object$status)) {
+    stop("No status table found in dt_object.")
+  }
+
+  if (!is.data.frame(manual_decisions) || nrow(manual_decisions) == 0) {
+    stop("No manual decisions were provided.")
+  }
+
+  required_cols <- c("designation", "table_decision")
+  missing_cols <- setdiff(required_cols, colnames(manual_decisions))
+  if (length(missing_cols) > 0) {
+    stop(
+      "Missing required columns in manual_decisions: ",
+      paste(missing_cols, collapse = ", ")
+    )
+  }
+
+  valid_values <- c("SELECTED", "NOT SELECTED", "REVISE")
+  if (!all(manual_decisions$table_decision %in% valid_values)) {
+    stop("manual_decisions$table_decision must contain only 'SELECTED', 'NOT SELECTED', or 'REVISE'.")
+  }
+
+  base_selection <- dt_object$modifications$selection
+  base_selection <- base_selection[
+    base_selection$analysisId %in% initialSelectionStamp &
+      base_selection$module == "Init_prodAdv" &
+      base_selection$reason == "initial_selection",
+    ,
+    drop = FALSE
+  ]
+
+  if (nrow(base_selection) == 0) {
+    stop("No initial selection records found for the provided initialSelectionStamp.")
+  }
+
+  names(base_selection)[names(base_selection) == "value"] <- "base_decision"
+  base_selection <- unique(base_selection[, c("designation", "base_decision"), drop = FALSE])
+
+  if (!is.null(tableSelectionStamp) && nzchar(tableSelectionStamp)) {
+    previous_table <- dt_object$modifications$selection
+    previous_table <- previous_table[
+      previous_table$analysisId %in% tableSelectionStamp &
+        previous_table$module == "Table_prodAdv" &
+        previous_table$reason == "manual_table_selection",
+      ,
+      drop = FALSE
+    ]
+
+    if (nrow(previous_table) > 0) {
+      names(previous_table)[names(previous_table) == "value"] <- "base_decision"
+      previous_table <- unique(previous_table[, c("designation", "base_decision"), drop = FALSE])
+      base_selection <- previous_table
+    }
+  }
+
+  merged_decisions <- merge(
+    base_selection,
+    manual_decisions,
+    by = "designation",
+    all.y = TRUE
+  )
+
+  if (nrow(merged_decisions) == 0) {
+    stop("None of the manual decisions matched the candidate designations.")
+  }
+
+  modifications <- data.frame(
+    module = "Table_prodAdv",
+    analysisId = analysisId,
+    designation = merged_decisions$designation,
+    reason = "manual_table_selection",
+    value = merged_decisions$table_decision,
+    stringsAsFactors = FALSE
+  )
+
+  status <- data.frame(
+    module = "Table_prodAdv",
+    analysisId = analysisId,
+    analysisIdName = analysisIdName,
+    stringsAsFactors = FALSE
+  )
+
+  dt_object$modifications$selection <- rbind(
+    dt_object$modifications$selection,
+    modifications
+  )
+
+  dt_object$status <- rbind(
+    dt_object$status,
+    status
+  )
+
   dt_object
 }
 
@@ -730,6 +1373,7 @@ saveFinalProdAdvSelection <- function(
 
 build_prodadv_decision_table_data <- function(dt,
                                               initial_stamp,
+                                              table_stamp = "__none__",
                                               plot_stamp = "__none__",
                                               final_stamp = "__none__",
                                               final_overrides = NULL) {
@@ -917,6 +1561,36 @@ build_prodadv_decision_table_data <- function(dt,
     all.x = TRUE
   )
   
+  if (!is.null(table_stamp) &&
+      nzchar(table_stamp) &&
+      table_stamp != "__none__") {
+
+    table_manual <- dt$modifications$selection[
+      dt$modifications$selection$analysisId %in% table_stamp &
+        dt$modifications$selection$module == "Table_prodAdv" &
+        dt$modifications$selection$reason == "manual_table_selection",
+      ,
+      drop = FALSE
+    ]
+
+    if (nrow(table_manual) > 0) {
+      table_manual <- unique(table_manual[, c("designation", "value"), drop = FALSE])
+      names(table_manual)[names(table_manual) == "value"] <- "table_decision"
+
+      base_df <- merge(
+        base_df,
+        table_manual,
+        by = "designation",
+        all.x = TRUE
+      )
+    } else {
+      base_df$table_decision <- NA_character_
+    }
+
+  } else {
+    base_df$table_decision <- NA_character_
+  }
+
   if (!is.null(plot_stamp) &&
       nzchar(plot_stamp) &&
       plot_stamp != "__none__") {
@@ -1000,6 +1674,7 @@ build_prodadv_decision_table_data <- function(dt,
     base_df$final_decision,
     base_df$final_manual_decision,
     base_df$plot_decision,
+    base_df$table_decision,
     base_df$initial_decision
   )
   
@@ -2569,4 +3244,151 @@ cluster_genomic_only <- function(grm, selected_designations, index_values) {
 
   # 8. Return
   list(clusters = ordered_clusters, dendrogram = hc, missing = missing_desig)
+}
+
+
+#' Save meeting product advancement consensus decisions
+#'
+#' Persists the meeting consensus decisions with full provenance linking
+#' back to each stakeholder's Final_Selection_Stamp and the shared MTA analysis.
+#'
+#' @param analysisId Numeric timestamp ID for this meeting analysis.
+#' @param analysisIdName Character string name for the meeting (optional).
+#' @param stakeholderStamps Character vector of Final_Selection_Stamp analysisId values.
+#' @param mtaStamp Character scalar — the shared MTA_Stamp that all stakeholders are based on.
+#' @param meetingDecisions Data frame with columns: designation, decision.
+#' @param participants Character vector of stakeholder labels (participant names).
+#' @param dt_object The data object list.
+#' @return Updated dt_object with new modeling, modifications, and status rows.
+#' @export
+saveMeetingProdAdvSelection <- function(
+    analysisId,
+    analysisIdName = NULL,
+    stakeholderStamps,
+    mtaStamp,
+    meetingDecisions,
+    participants,
+    dt_object
+) {
+  # Validate required parameters
+  if (is.null(analysisId)) stop("'analysisId' is required.")
+  if (is.null(stakeholderStamps) || length(stakeholderStamps) == 0) {
+    stop("'stakeholderStamps' is required.")
+  }
+
+  if (is.null(mtaStamp) || !nzchar(mtaStamp)) {
+    stop("'mtaStamp' is required.")
+  }
+  if (is.null(meetingDecisions) || !is.data.frame(meetingDecisions) || nrow(meetingDecisions) == 0) {
+    stop("'meetingDecisions' must be a non-empty data frame.")
+  }
+  if (is.null(dt_object) || !is.list(dt_object)) {
+    stop("'dt_object' must be a data object list.")
+  }
+
+  # Validate meetingDecisions columns
+  required_cols <- c("designation", "decision")
+  missing_cols <- setdiff(required_cols, colnames(meetingDecisions))
+  if (length(missing_cols) > 0) {
+    stop("Missing required columns in meetingDecisions: ", paste(missing_cols, collapse = ", "))
+  }
+
+  # Validate decision values
+  valid_values <- c("SELECTED", "NOT SELECTED", "REVISE", "CHECK")
+  invalid <- setdiff(unique(meetingDecisions$decision), valid_values)
+  if (length(invalid) > 0) {
+    stop("Invalid decision values: ", paste(invalid, collapse = ", "))
+  }
+
+  # --- Modeling table: analysis metadata ---
+  modeling_cols <- colnames(dt_object$modeling)
+
+  make_modeling_row <- function(mod, aid, aid_name, tr, env, param, val) {
+    row <- as.list(rep(NA_character_, length(modeling_cols)))
+    names(row) <- modeling_cols
+    if ("module" %in% modeling_cols) row$module <- mod
+    if ("analysisId" %in% modeling_cols) row$analysisId <- aid
+    if ("analysisIdName" %in% modeling_cols) row$analysisIdName <- aid_name
+    if ("trait" %in% modeling_cols) row$trait <- tr
+    if ("environment" %in% modeling_cols) row$environment <- env
+    if ("parameter" %in% modeling_cols) row$parameter <- param
+    if ("value" %in% modeling_cols) row$value <- val
+    as.data.frame(row, stringsAsFactors = FALSE)
+  }
+
+  aid_name <- if (!is.null(analysisIdName)) analysisIdName else NA_character_
+
+  # Row 1: analysisType
+  modeling_type_row <- make_modeling_row(
+    "Meeting_prodAdv", analysisId, aid_name, NA_character_, "across",
+    "analysisType", "meeting_decision"
+  )
+
+  # Rows: inputObject per stakeholder stamp
+  input_stakeholder_rows <- do.call(rbind, lapply(stakeholderStamps, function(sv) {
+    make_modeling_row(
+      "Meeting_prodAdv", analysisId, aid_name, NA_character_, "across",
+      "inputObject", sv
+    )
+  }))
+
+  # Row: inputObject for MTA stamp
+  input_mta_row <- make_modeling_row(
+    "Meeting_prodAdv", analysisId, aid_name, NA_character_, "across",
+    "inputObject", mtaStamp
+  )
+
+  # Row: participants
+  participants_value <- paste(participants, collapse = ",")
+  participants_row <- make_modeling_row(
+    "Meeting_prodAdv", analysisId, aid_name, NA_character_, "across",
+    "participants", participants_value
+  )
+
+  # --- Modifications table ---
+  mod_cols <- colnames(dt_object$modifications$selection)
+
+  make_mod_row <- function(mod, aid, desig, reason, val) {
+    row <- as.list(rep(NA_character_, length(mod_cols)))
+    names(row) <- mod_cols
+    if ("module" %in% mod_cols) row$module <- mod
+    if ("analysisId" %in% mod_cols) row$analysisId <- aid
+    if ("designation" %in% mod_cols) row$designation <- desig
+    if ("reason" %in% mod_cols) row$reason <- reason
+    if ("value" %in% mod_cols) row$value <- val
+    as.data.frame(row, stringsAsFactors = FALSE)
+  }
+
+  modifications <- do.call(rbind, lapply(seq_len(nrow(meetingDecisions)), function(i) {
+    make_mod_row(
+      "Meeting_prodAdv", analysisId,
+      meetingDecisions$designation[i], "meeting_decision",
+      meetingDecisions$decision[i]
+    )
+  }))
+
+  # --- Status table ---
+  status_cols <- colnames(dt_object$status)
+  status_row <- as.list(rep(NA_character_, length(status_cols)))
+  names(status_row) <- status_cols
+  if ("module" %in% status_cols) status_row$module <- "Meeting_prodAdv"
+  if ("analysisId" %in% status_cols) status_row$analysisId <- analysisId
+  if ("analysisIdName" %in% status_cols) status_row$analysisIdName <- aid_name
+  status_row <- as.data.frame(status_row, stringsAsFactors = FALSE)
+
+  # Append to dt_object
+  dt_object$modeling <- rbind(
+    dt_object$modeling,
+    modeling_type_row,
+    input_stakeholder_rows,
+    input_mta_row,
+    participants_row
+  )
+  dt_object$modifications$selection <- rbind(
+    dt_object$modifications$selection,
+    modifications
+  )
+  dt_object$status <- rbind(dt_object$status, status_row)
+
+  dt_object
 }
