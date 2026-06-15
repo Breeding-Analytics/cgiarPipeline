@@ -1182,9 +1182,9 @@ saveTableProdAdvSelection <- function(
     )
   }
 
-  valid_values <- c("SELECTED", "NOT SELECTED", "REVISE")
+  valid_values <- c("SELECTED", "NOT SELECTED", "REVISE", "CHECK")
   if (!all(manual_decisions$table_decision %in% valid_values)) {
-    stop("manual_decisions$table_decision must contain only 'SELECTED', 'NOT SELECTED', or 'REVISE'.")
+    stop("manual_decisions$table_decision must contain only 'SELECTED', 'NOT SELECTED', 'REVISE', or 'CHECK'.")
   }
 
   base_selection <- dt_object$modifications$selection
