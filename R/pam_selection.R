@@ -1690,6 +1690,7 @@ build_prodadv_decision_table_data <- function(dt,
 
 build_prodadv_review_plot_data <- function(dt,
                                            initial_stamp,
+                                           table_stamp = "__none__",
                                            plot_stamp = "__none__",
                                            final_stamp = "__none__") {
   
@@ -1738,6 +1739,29 @@ build_prodadv_review_plot_data <- function(dt,
   names(init_sel)[names(init_sel) == "value"] <- "initial_decision"
   review_designations <- unique(init_sel$designation)
   
+  
+  table_sel <- NULL
+  
+  if (!is.null(table_stamp) &&
+      nzchar(table_stamp) &&
+      table_stamp != "__none__") {
+    
+    table_sel <- dt$modifications$selection
+    table_sel <- table_sel[
+      as.character(table_sel$analysisId) %in% as.character(table_stamp) &
+        table_sel$module == "Table_prodAdv" &
+        table_sel$reason == "manual_table_selection",
+      ,
+      drop = FALSE
+    ]
+    
+    if (nrow(table_sel) > 0) {
+      table_sel <- unique(table_sel[, c("designation", "value"), drop = FALSE])
+      names(table_sel)[names(table_sel) == "value"] <- "table_decision"
+    } else {
+      table_sel <- NULL
+    }
+  }
   
   plot_sel <- NULL
   
@@ -1935,6 +1959,17 @@ build_prodadv_review_plot_data <- function(dt,
     all.x = TRUE
   )
   
+  if (!is.null(table_sel)) {
+    review_df <- merge(
+      review_df,
+      table_sel,
+      by = "designation",
+      all.x = TRUE
+    )
+  } else {
+    review_df$table_decision <- NA_character_
+  }
+  
   if (!is.null(plot_sel)) {
     review_df <- merge(
       review_df,
@@ -1960,6 +1995,7 @@ build_prodadv_review_plot_data <- function(dt,
   review_df$plot_status <- coalesce_chr(
     review_df$final_decision,
     review_df$plot_decision,
+    review_df$table_decision,
     review_df$initial_decision
   )
   
