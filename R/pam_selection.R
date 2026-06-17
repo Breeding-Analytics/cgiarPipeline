@@ -456,6 +456,11 @@ assessSelectionQuality <- function(args, dt_object) {
         rel_class <- "Low reliability"
       }
 
+      # If boundary_separability is NA (couldn't compute), treat as "Non-separable boundary" for safety
+      if (is.na(bnd_sep)) {
+        bnd_sep <- "Non-separable boundary"
+      }
+
       # Format selection intensity for justification strings
       si_val <- selection_intensity
 
@@ -484,26 +489,18 @@ assessSelectionQuality <- function(args, dt_object) {
         trait_assessments$default_keep[i] <- TRUE
 
       } else if (rel_class == "Moderate reliability" && bnd_sep == "Non-separable boundary") {
-        trait_assessments$integrated_recommendation[i] <- "Use with caution (boundary non-separable)"
-        trait_assessments$justification[i] <- paste0(
-          "Trait has moderate overall reliability and, with ", si_val,
-          "% of individuals selected, the entries around the selection boundary do not have enough index separability. User is advised to reduce the weight of this trait or exclude it."
-        )
-        trait_assessments$default_keep[i] <- TRUE
-
-      } else if (rel_class == "Low reliability" && bnd_sep == "Separable boundary") {
-        trait_assessments$integrated_recommendation[i] <- "Use with caution (boundary separable)"
-        trait_assessments$justification[i] <- paste0(
-          "Trait has low overall reliability but, with ", si_val,
-          "% of individuals selected, the entries around the selection boundary still have enough index reliability for selection to be performed. Trait may be kept but user is strongly advised to avoid overriding the index decision based on values for this trait alone."
-        )
-        trait_assessments$default_keep[i] <- TRUE
-
-      } else if (rel_class == "Low reliability" && bnd_sep == "Non-separable boundary") {
         trait_assessments$integrated_recommendation[i] <- "Recommended to exclude"
         trait_assessments$justification[i] <- paste0(
-          "Trait has low overall reliability and, with ", si_val,
-          "% of individuals selected, the entries around the selection boundary do not have enough index reliability for selection to be performed. User is strongly advised to remove this trait."
+          "Trait has moderate overall reliability and, with ", si_val,
+          "% of individuals selected, the entries around the selection boundary do not have enough index separability. User is advised to exclude this trait from the index."
+        )
+        trait_assessments$default_keep[i] <- FALSE
+
+      } else if (rel_class == "Low reliability") {
+        trait_assessments$integrated_recommendation[i] <- "Recommended to exclude"
+        trait_assessments$justification[i] <- paste0(
+          "Trait has low overall reliability at ", si_val,
+          "% selection intensity. Regardless of boundary separability, the trait estimates are too uncertain to contribute meaningfully to the index. User is strongly advised to remove this trait."
         )
         trait_assessments$default_keep[i] <- FALSE
 
@@ -804,10 +801,10 @@ runInitialProdAdv <- function(analysisId = as.numeric(Sys.time()),
     candidate_indices <- seq_len(nrow(mta_preds_long))
   }
 
-  if (!is.null(args$nSelected) && args$nSelected > 0) {
+  if (!is.null(args$nSelected) && !is.na(args$nSelected) && args$nSelected > 0) {
     n_selected <- min(args$nSelected, n_candidates)
   } else {
-    top_pct <- if (!is.null(args$topPctSelected)) args$topPctSelected else 20
+    top_pct <- if (!is.null(args$topPctSelected) && !is.na(args$topPctSelected)) args$topPctSelected else 20
     n_selected <- as.integer(n_candidates * (top_pct / 100))
   }
   n_selected <- max(c(1, n_selected))
@@ -836,10 +833,10 @@ runInitialProdAdv <- function(analysisId = as.numeric(Sys.time()),
     trait_value <- mta_preds_long[, t]
 
     # Default: no threshold set (all pass)
-    if (is.null(trait_rules) || is.null(trait_rules$ruleType) || trait_rules$ruleType == "None") {
+    if (is.null(trait_rules) || is.null(trait_rules$ruleType) || is.na(trait_rules$ruleType) || trait_rules$ruleType == "None") {
       decision <- rep("SELECTED", length(trait_value))
     } else if (trait_rules$ruleType == "Threshold") {
-      if (trait_rules$direction == "Higher is better") {
+      if (is.null(trait_rules$direction) || is.na(trait_rules$direction) || trait_rules$direction == "Higher is better") {
         decision <- ifelse(trait_value >= trait_rules$threshold, "SELECTED", "NOT SELECTED")
       } else {
         decision <- ifelse(trait_value <= trait_rules$threshold, "SELECTED", "NOT SELECTED")
@@ -852,7 +849,7 @@ runInitialProdAdv <- function(analysisId = as.numeric(Sys.time()),
         stop("Checks are required when using a '% over check' trait threshold.")
       }
       check_value <- mean(trait_value[mta_preds_long$entryType == check_entry_type_value], na.rm = TRUE)
-      if (trait_rules$direction == "Higher is better") {
+      if (is.null(trait_rules$direction) || is.na(trait_rules$direction) || trait_rules$direction == "Higher is better") {
         target <- check_value + check_value * (trait_rules$threshold / 100)
         decision <- ifelse(trait_value >= target, "SELECTED", "NOT SELECTED")
       } else {
@@ -865,7 +862,7 @@ runInitialProdAdv <- function(analysisId = as.numeric(Sys.time()),
       } else {
         mean_value <- mean(trait_value[mta_preds_long$entryType != check_entry_type_value], na.rm = TRUE)
       }
-      if (trait_rules$direction == "Higher is better") {
+      if (is.null(trait_rules$direction) || is.na(trait_rules$direction) || trait_rules$direction == "Higher is better") {
         target <- mean_value + mean_value * (trait_rules$threshold / 100)
         decision <- ifelse(trait_value >= target, "SELECTED", "NOT SELECTED")
       } else {
