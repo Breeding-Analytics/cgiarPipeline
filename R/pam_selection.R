@@ -877,6 +877,9 @@ runInitialProdAdv <- function(analysisId = as.numeric(Sys.time()),
       decision[toupper(trimws(mta_preds_long$entryType)) == toupper(trimws(check_entry_type_value))] <- "CHECK"
     }
 
+    # Treat NA decisions (from missing trait values) as passing — don't penalize missing data
+    decision[is.na(decision)] <- "SELECTED"
+
     trait_decision[, paste0(t, "_trait_decision")] <- decision
   }
 
@@ -887,8 +890,8 @@ runInitialProdAdv <- function(analysisId = as.numeric(Sys.time()),
   decision_cols <- grep("_decision", colnames(mta_preds_long), value = TRUE)
   decision_set <- mta_preds_long[, decision_cols, drop = FALSE]
   initial_decision <- apply(decision_set, 1, function(x) {
-    if (any(x == "CHECK")) return("CHECK")
-    if (any(x == "NOT SELECTED")) return("NOT SELECTED")
+    if (any(x == "CHECK", na.rm = TRUE)) return("CHECK")
+    if (any(x == "NOT SELECTED", na.rm = TRUE)) return("NOT SELECTED")
     return("SELECTED")
   })
 
