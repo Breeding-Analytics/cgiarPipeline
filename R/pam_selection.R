@@ -2775,6 +2775,147 @@ assign_families <- function(pedigree_df, designation_col, mother_col, father_col
 }
 
 
+#' Order families by inter-family genetic similarity
+#'
+#' Computes a distance between families and returns an ordering such that more
+#' similar families are placed adjacent to one another. When a genomic
+#' relationship matrix (GRM) is available, inter-family distance is derived from
+#' the average pairwise GRM coefficient between members of each family pair.
+#' When only pedigree information is available, families are compared based on
+#' shared parentage: families sharing both parents have distance 0, one parent
+#' gives distance 0.5, and no parents in common gives distance 1.
+#'
+#' @param family_labels Named character vector (names = designations, values =
+#'   family labels) as returned by \code{assign_families()}.
+#' @param display_designations Character vector of designations currently
+#'   displayed (subset of names in \code{family_labels}).
+#' @param similarity_matrix Named symmetric matrix (GRM or A-matrix), or NULL.
+#'   When provided, this takes precedence for computing inter-family distances.
+#' @param pedigree_df Data.frame with pedigree information, or NULL. Used as
+#'   fallback when \code{similarity_matrix} is NULL or when families have no
+#'   members in the matrix.
+#' @param designation_col Character, column name for designations in pedigree_df.
+#' @param mother_col Character, column name for mothers in pedigree_df.
+#' @param father_col Character, column name for fathers in pedigree_df.
+#'
+#' @return Character vector of unique family labels in similarity-based order.
+#'
+#' @export
+order_families_by_similarity <- function(family_labels, display_designations,
+                                          similarity_matrix = NULL,
+                                          pedigree_df = NULL,
+                                          designation_col = NULL,
+                                          mother_col = NULL,
+                                          father_col = NULL) {
+
+  # Get families for displayed designations only
+  displayed_families <- family_labels[display_designations]
+  displayed_families <- displayed_families[!is.na(displayed_families)]
+  unique_fams <- unique(displayed_families)
+
+  # If 2 or fewer families, no ordering needed
+  if (length(unique_fams) <= 2) {
+    return(unique_fams)
+  }
+
+  n_fams <- length(unique_fams)
+
+  # --- Attempt GRM-based ordering ---
+  if (!is.null(similarity_matrix) && nrow(similarity_matrix) > 0) {
+    # Compute average GRM between members of each family pair
+    fam_members <- lapply(unique_fams, function(f) {
+      members <- names(displayed_families)[displayed_families == f]
+      intersect(members, rownames(similarity_matrix))
+    })
+    names(fam_members) <- unique_fams
+
+    # Check if we have enough families with at least 1 member in GRM
+    fams_in_grm <- unique_fams[sapply(fam_members, length) > 0]
+
+    if (length(fams_in_grm) >= 2) {
+      # Build inter-family distance matrix
+      dist_mat <- matrix(0, nrow = n_fams, ncol = n_fams)
+      rownames(dist_mat) <- colnames(dist_mat) <- unique_fams
+
+      for (i in seq_len(n_fams - 1)) {
+        for (j in (i + 1):n_fams) {
+          members_i <- fam_members[[unique_fams[i]]]
+          members_j <- fam_members[[unique_fams[j]]]
+
+          if (length(members_i) > 0 && length(members_j) > 0) {
+            # Average GRM between families
+            avg_grm <- mean(similarity_matrix[members_i, members_j, drop = FALSE], na.rm = TRUE)
+            # Convert similarity to distance
+            dist_mat[i, j] <- 1 - avg_grm
+            dist_mat[j, i] <- dist_mat[i, j]
+          } else {
+            # No overlap with GRM — assign large distance
+            dist_mat[i, j] <- 2
+            dist_mat[j, i] <- 2
+          }
+        }
+      }
+
+      # Hierarchical clustering to get a sensible ordering
+      hc <- stats::hclust(stats::as.dist(dist_mat), method = "average")
+      return(unique_fams[hc$order])
+    }
+  }
+
+  # --- Fallback: pedigree-based ordering ---
+  if (!is.null(pedigree_df) && !is.null(designation_col) &&
+      !is.null(mother_col) && !is.null(father_col)) {
+
+    # For each family, identify its parents (take the first member's parents)
+    fam_parents <- lapply(unique_fams, function(f) {
+      members <- names(displayed_families)[displayed_families == f]
+      ped_rows <- pedigree_df[pedigree_df[[designation_col]] %in% members, , drop = FALSE]
+      if (nrow(ped_rows) == 0) return(c(mother = NA_character_, father = NA_character_))
+      c(mother = as.character(ped_rows[[mother_col]][1]),
+        father = as.character(ped_rows[[father_col]][1]))
+    })
+    names(fam_parents) <- unique_fams
+
+    # Build distance: 0 if both parents shared, 0.5 if one parent shared, 1 if none
+    dist_mat <- matrix(1, nrow = n_fams, ncol = n_fams)
+    rownames(dist_mat) <- colnames(dist_mat) <- unique_fams
+    diag(dist_mat) <- 0
+
+    for (i in seq_len(n_fams - 1)) {
+      for (j in (i + 1):n_fams) {
+        parents_i <- fam_parents[[unique_fams[i]]]
+        parents_j <- fam_parents[[unique_fams[j]]]
+
+        # Collect non-NA parents
+        pi <- parents_i[!is.na(parents_i) & nzchar(parents_i)]
+        pj <- parents_j[!is.na(parents_j) & nzchar(parents_j)]
+
+        if (length(pi) == 0 || length(pj) == 0) {
+          dist_mat[i, j] <- 1
+        } else {
+          # Count shared parents (order-independent: any parent from i matching any from j)
+          shared <- length(intersect(pi, pj))
+          if (shared >= 2) {
+            dist_mat[i, j] <- 0
+          } else if (shared == 1) {
+            dist_mat[i, j] <- 0.5
+          } else {
+            dist_mat[i, j] <- 1
+          }
+        }
+        dist_mat[j, i] <- dist_mat[i, j]
+      }
+    }
+
+    hc <- stats::hclust(stats::as.dist(dist_mat), method = "average")
+    return(unique_fams[hc$order])
+  }
+
+  # No similarity data available — return as-is
+  unique_fams
+}
+
+
 #' Build HTML tooltip for the relatedness plot
 #'
 #' Constructs an HTML tooltip string for a single individual in the
@@ -2951,8 +3092,11 @@ compute_a_matrix <- function(phenoDTfile) {
 #'
 #' A non-selected individual qualifies as a diversity candidate when:
 #' \enumerate{
-#'   \item Its Selection_Index (\code{index_value}) exceeds the 40th percentile
-#'     of index values among the selected set.
+#'   \item Its Selection_Index (\code{index_value}) is above a performance
+#'     threshold defined as 10 percentiles below the percentile rank of the
+#'     lowest-scoring selected individual within the full candidate population.
+#'     For example, if the worst selected candidate sits at the 70th percentile
+#'     of all candidates, the threshold is the 60th percentile of all candidates.
 #'   \item Its average relatedness to the selected set is below the median of
 #'     pairwise relatedness coefficients among selected individuals.
 #' }
@@ -2972,7 +3116,6 @@ compute_a_matrix <- function(phenoDTfile) {
 #' @export
 classify_diversity_candidates <- function(candidates_df, similarity_matrix, selected_set) {
   # Guard: skip classification if fewer than 2 selected individuals
-
   if (length(selected_set) < 2) {
     return(character(0))
   }
@@ -2980,19 +3123,34 @@ classify_diversity_candidates <- function(candidates_df, similarity_matrix, sele
   # Identify non-selected individuals from candidates_df
   non_selected_df <- candidates_df[!(candidates_df$designation %in% selected_set), , drop = FALSE]
 
-  # Compute the 40th percentile of index_value among selected individuals
-  selected_df <- candidates_df[candidates_df$designation %in% selected_set, , drop = FALSE]
-  selected_index_values <- selected_df$index_value
-  # Remove NAs from selected index values for percentile computation
+  # Compute the performance threshold:
+  # Find the percentile rank of the min selected candidate within ALL candidates,
 
-  selected_index_values <- selected_index_values[!is.na(selected_index_values)]
+  # then subtract 10 percentiles.
+  all_index_values <- candidates_df$index_value[!is.na(candidates_df$index_value)]
+  if (length(all_index_values) == 0) {
+    return(character(0))
+  }
+
+  selected_df <- candidates_df[candidates_df$designation %in% selected_set, , drop = FALSE]
+  selected_index_values <- selected_df$index_value[!is.na(selected_df$index_value)]
   if (length(selected_index_values) == 0) {
     return(character(0))
   }
-  index_threshold <- as.numeric(stats::quantile(selected_index_values, probs = 0.40))
+
+  min_selected_index <- min(selected_index_values)
+
+  # Percentile rank of min selected within all candidates (proportion <= min_selected)
+  min_selected_percentile <- mean(all_index_values <= min_selected_index)
+
+  # Threshold percentile = min_selected_percentile - 0.10, floored at 0
+
+  threshold_percentile <- max(0, min_selected_percentile - 0.10)
+
+  # Convert back to index_value threshold
+  index_threshold <- as.numeric(stats::quantile(all_index_values, probs = threshold_percentile))
 
   # Compute median of pairwise relatedness among selected individuals
-
   # Use only selected individuals present in the similarity matrix
   selected_in_matrix <- intersect(selected_set, rownames(similarity_matrix))
   if (length(selected_in_matrix) < 2) {
@@ -3021,7 +3179,7 @@ classify_diversity_candidates <- function(candidates_df, similarity_matrix, sele
       next
     }
 
-    # Check condition (a): index_value > 40th percentile of selected
+    # Check condition (a): index_value > threshold (10 pctiles below min selected)
     if (idx_val <= index_threshold) {
       next
     }
