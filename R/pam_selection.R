@@ -3093,10 +3093,10 @@ compute_a_matrix <- function(phenoDTfile) {
 #' A non-selected individual qualifies as a diversity candidate when:
 #' \enumerate{
 #'   \item Its Selection_Index (\code{index_value}) is above a performance
-#'     threshold defined as 10 percentiles below the percentile rank of the
+#'     threshold defined as 20 percentiles below the percentile rank of the
 #'     lowest-scoring selected individual within the full candidate population.
 #'     For example, if the worst selected candidate sits at the 70th percentile
-#'     of all candidates, the threshold is the 60th percentile of all candidates.
+#'     of all candidates, the threshold is the 50th percentile of all candidates.
 #'   \item Its average relatedness to the selected set is below the median of
 #'     pairwise relatedness coefficients among selected individuals.
 #' }
@@ -3143,9 +3143,9 @@ classify_diversity_candidates <- function(candidates_df, similarity_matrix, sele
   # Percentile rank of min selected within all candidates (proportion <= min_selected)
   min_selected_percentile <- mean(all_index_values <= min_selected_index)
 
-  # Threshold percentile = min_selected_percentile - 0.10, floored at 0
+  # Threshold percentile = min_selected_percentile - 0.20, floored at 0
 
-  threshold_percentile <- max(0, min_selected_percentile - 0.10)
+  threshold_percentile <- max(0, min_selected_percentile - 0.20)
 
   # Convert back to index_value threshold
   index_threshold <- as.numeric(stats::quantile(all_index_values, probs = threshold_percentile))
