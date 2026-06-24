@@ -1431,7 +1431,8 @@ build_prodadv_decision_table_data <- function(dt,
   
   preds <- dt$predictions[
     dt$predictions$analysisId %in% mta_stamp &
-      dt$predictions$trait %in% selected_traits,
+      dt$predictions$trait %in% selected_traits &
+      dt$predictions$effectType == "designation",
     ,
     drop = FALSE
   ]
