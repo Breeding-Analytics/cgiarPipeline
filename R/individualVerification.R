@@ -93,7 +93,25 @@ individualVerification <- function(
   #Check if marker data is fully available
   parents_have_geno = (cross$Var2 %in% rownames(Markers))&(cross$Var1 %in% rownames(Markers))
   progeny_have_geno = cross$hybrid %in% rownames(Markers)
-  
+
+  # Check minimum non-missing markers per parent (at least 8 required)
+  min_par_markers <- 8L
+  Markers_mat <- data.matrix(Markers)
+  parent_nonmiss <- rowSums(!is.na(Markers_mat))
+
+  # For parents that exist in the matrix, check if they have enough markers
+  mother_enough <- vapply(cross$Var1, function(m) {
+    if (is.na(m) || !(m %in% names(parent_nonmiss))) return(FALSE)
+    parent_nonmiss[m] >= min_par_markers
+  }, logical(1))
+  father_enough <- vapply(cross$Var2, function(f) {
+    if (is.na(f) || !(f %in% names(parent_nonmiss))) return(FALSE)
+    parent_nonmiss[f] >= min_par_markers
+  }, logical(1))
+
+  # A parent is considered to have geno only if present AND has >= 8 markers
+  parents_have_geno <- parents_have_geno & mother_enough & father_enough
+
   #Get failed output due to missing geno data
   fail_par = cross[!parents_have_geno,"hybrid"]
   fail_pro = cross[!progeny_have_geno,"hybrid"]

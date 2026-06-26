@@ -24,6 +24,7 @@ export(
        buildProdAdvPerformanceProfile,
        detect_relatedness_mode,
        assign_families,
+       order_families_by_similarity,
        compute_a_matrix,
        compute_grm,
        cluster_genomic_only,
