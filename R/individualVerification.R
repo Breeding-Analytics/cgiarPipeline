@@ -93,7 +93,25 @@ individualVerification <- function(
   #Check if marker data is fully available
   parents_have_geno = (cross$Var2 %in% rownames(Markers))&(cross$Var1 %in% rownames(Markers))
   progeny_have_geno = cross$hybrid %in% rownames(Markers)
-  
+
+  # Check minimum non-missing markers per parent (at least 8 required)
+  min_par_markers <- 8L
+  Markers_mat <- data.matrix(Markers)
+  parent_nonmiss <- rowSums(!is.na(Markers_mat))
+
+  # For parents that exist in the matrix, check if they have enough markers
+  mother_enough <- vapply(cross$Var1, function(m) {
+    if (is.na(m) || !(m %in% names(parent_nonmiss))) return(FALSE)
+    parent_nonmiss[m] >= min_par_markers
+  }, logical(1))
+  father_enough <- vapply(cross$Var2, function(f) {
+    if (is.na(f) || !(f %in% names(parent_nonmiss))) return(FALSE)
+    parent_nonmiss[f] >= min_par_markers
+  }, logical(1))
+
+  # A parent is considered to have geno only if present AND has >= 8 markers
+  parents_have_geno <- parents_have_geno & mother_enough & father_enough
+
   #Get failed output due to missing geno data
   fail_par = cross[!parents_have_geno,"hybrid"]
   fail_pro = cross[!progeny_have_geno,"hybrid"]
@@ -157,9 +175,9 @@ individualVerification <- function(
   newStatus <- data.frame(module="gVerif", analysisId=analysisId, analysisIdName=NA)
   object$status <- rbind( object$status, newStatus[,colnames(object$status)])
   ## modeling
-  modeling <- data.frame(module="gVerif",  analysisId=analysisId, trait=c(rep("none",length(colsForExpecGeno)+length(het)+length(matchThres)+length(markersToBeUsed) ),"inputObject"), environment="general",
-                         parameter= c(rep("expectedGenoColumn",length(colsForExpecGeno)),"ParentMaxHetThresh", "UpperMatchProbThres","MidMatchProbThres","LowerMatchProbThres",rep("markerUsed",length(markersToBeUsed)), "analysisId"  ),
-                         value= c(colsForExpecGeno,het,matchThres,markersToBeUsed,analysisIdForGenoModifications ))
+  modeling <- data.frame(module="gVerif",  analysisId=analysisId, trait=c(rep("none",length(colsForExpecGeno)+length(het)+2+length(markersToBeUsed) ),"inputObject"), environment="general",
+                         parameter= c(rep("expectedGenoColumn",length(colsForExpecGeno)),"ParentMaxHetThresh", "UpperMatchProbThres","LowerMatchProbThres",rep("markerUsed",length(markersToBeUsed)), "analysisId"  ),
+                         value= c(colsForExpecGeno,het,matchThres[1],matchThres[3],markersToBeUsed,analysisIdForGenoModifications ))
   if(is.null(object$modeling)){
     object$modeling <-  modeling
   }else{
@@ -186,10 +204,10 @@ individualVerification <- function(
   het_pct_mal <- (pmax(n_non_missing - n_homo, 0) / pmax(n_non_missing, 1)) * 100
   
   #Filters
-  het_filter = (het_pct_fem < het & het_pct_mal < het)
+  het_filter = (het_pct_fem <= het & het_pct_mal <= het)
   
-  indivMatchedN = length(which(res$metricsInd$probMatch[het_filter] >= matchThres[1]))
-  indivUnmatchedN = nInds - indivMatchedN
+  indivMatchedN = length(which(het_filter & res$metricsInd$probMatch >= matchThres[1]))
+  indivUnmatchedN = nrow(cross_filt) - indivMatchedN
   object$metrics <- rbind(object$metrics,
                                data.frame(module="gVerif",analysisId=analysisId, trait="none", environment="general",
                                           parameter= c("nMarkers","nInds", "monomorphicMarkersN","polymorphicMarkersN","indivMatchedN","indivUnmatchedN"),

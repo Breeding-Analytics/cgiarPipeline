@@ -135,10 +135,10 @@ gpcp <- function(
   #Get marker effects
   #GPCP_list = phenoDTfile$GPCP
   GPCP_list <- list()
-  GPCP_list$BlupA<-phenoDTfile$predictions[which(phenoDTfile$predictions$effectType=="designationA"),]
-  GPCP_list$BlupD<-phenoDTfile$predictions[which(phenoDTfile$predictions$effectType=="designationD"),]
-  GPCP_list$f<-phenoDTfile$predictions[which(phenoDTfile$predictions$effectType=="inbreeding"),]
-  uno=phenoDTfile$modeling[phenoDTfile$modeling$module=="indexD",]
+  GPCP_list$BlupA<-phenoDTfile$predictions[which(phenoDTfile$predictions$effectType=="designationA"& phenoDTfile$predictions$analysisId == analysisIdOtherTraits),]
+  GPCP_list$BlupD<-phenoDTfile$predictions[which(phenoDTfile$predictions$effectType=="designationD"& phenoDTfile$predictions$analysisId == analysisIdOtherTraits),]
+  GPCP_list$f<-phenoDTfile$predictions[which(phenoDTfile$predictions$effectType=="inbreeding"& phenoDTfile$predictions$analysisId == analysisIdOtherTraits),]
+  uno=phenoDTfile$modeling[phenoDTfile$modeling$module=="indexD"& phenoDTfile$modeling$analysisId == analysisId,]
   uno=uno[which(uno$environment=="(Intercept)"),]
   GPCP_list$index_weights=uno[which(uno$parameter=="weight"),]
 
@@ -180,18 +180,20 @@ gpcp <- function(
   for(t in 1:length(traits_in_mta)){
     blupA = GPCP_list$BlupA[GPCP_list$BlupA$trait == traits_in_mta[t],]
     blupA = blupA[match(rownames(M),blupA$designation),]
-    Amat = Amat[,blupA$designation]
+    blupA = blupA[!is.na(blupA$designation),]
+    Amat_tmp = Amat[,blupA$designation]
 
-    add_eff[[t]] = as.vector(Amat %*% matrix(blupA$predictedValue))
+    add_eff[[t]] = as.vector(Amat_tmp %*% matrix(blupA$predictedValue))
 
     blupD = GPCP_list$BlupD[GPCP_list$BlupD$trait == traits_in_mta[t],]
     blupD = blupD[match(rownames(M),blupD$designation),]
-    Dmat = Dmat[,blupD$designation]
+    blupD = blupD[!is.na(blupD$designation),]
+    Dmat_tmp = Dmat[,blupD$designation]
 
     fCoef = GPCP_list$f[GPCP_list$f$trait == traits_in_mta[t],]
     fCoef = fCoef$predictedValue / ncol(M)
 
-    dom_eff[[t]] = as.vector(Dmat %*% matrix(blupD$predictedValue)) + fCoef
+    dom_eff[[t]] = as.vector(Dmat_tmp %*% matrix(blupD$predictedValue)) + fCoef
 
   }
 
@@ -206,7 +208,7 @@ gpcp <- function(
   di = Reduce('+',di)
 
   #Free up memory
-  Amat <- Dmat <- NULL
+  Amat <- Dmat <- Amat_tmp <- Dmat_tmp <- NULL
   if(ploidyFactor != 1){
     MAF <- C_mat <- Ploidy_mat <- Q <- NULL
   }
@@ -226,23 +228,27 @@ gpcp <- function(
   meanCross <- meanFcross <- meanCrossSe <- meanFcrossSe <- numeric()
 
   for(iRow in 1:nrow(forLoop)){ # iRow=1
+    
+    cat("Loading data \n")
 
     tgv <- data.frame(mydata[,c("predictedValue")]); rownames(tgv) <- mydata[,"designation"]
     tgv <- data.frame(tgv[rownames(M),]); rownames(tgv) <- rownames(M)
+    
+    M_tmp <- M
 
 
     # GPCP+OCS: Determine a crossing plan
     plan = cgiarOcs:: selectCrossPlan(42, # cycle number, currently irrelevant.
                                       nCross = forLoop[iRow,1], # desired number of crosses-- to deal with incompatibility pull more than needed
-                                      M = M, # SNP genotypes: ind in rows, snps in columns
+                                      M = M_tmp, # SNP genotypes: ind in rows, snps in columns
                                       a = ai, # additive Effects
                                       d = di, # dominance Effecs
                                       targetAngle = ((forLoop[iRow,2])*pi)/180, # target angle in radians
                                       ploidy = ploidy, # Ploidy
                                       cores = 4)
+    
+    cat("Cross plan obtained \n")
 
-
-    dim(plan$crossPlan)
 
     crossPlan <- as.data.frame(plan$crossPlan) # list of crosses to be made already sorted by best
     crossPlan[ ,1] <- rownames(K)[crossPlan[ ,1]]
@@ -269,6 +275,8 @@ gpcp <- function(
                           parameter= c("meanValue","meanF"),method= "sum/n", value=c(mean(eMPsel),mean(inbreedingSel)),
                           stdError=c(sd(eMPsel)/sqrt(length(eMPsel)) ,  sd(inbreedingSel)/sqrt(length(inbreedingSel)) )  )
     phenoDTfile$metrics <- rbind(phenoDTfile$metrics, metrics[, colnames(phenoDTfile$metrics)])
+    
+    cat("Getting other trait values \n")
 
     if(length(otherTraits) > 0){ # if there's more traits in the file, add the value of the crosses for those traits
       traitPredictions <- list()

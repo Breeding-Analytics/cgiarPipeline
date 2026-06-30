@@ -545,11 +545,11 @@ metASREML <- function(phenoDTfile = NULL,
     
     ## deregress if needed
     VarFull <- var(mydataSub[, "predictedValue"], na.rm = TRUE) # total variance
-    effectTypeTrait <- phenoDTfile$modeling[which(
-      phenoDTfile$modeling$analysisId == analysisId &
-        phenoDTfile$modeling$trait == iTrait &
-        phenoDTfile$modeling$parameter == "designationEffectType"
-    ), "value"]
+    if(length(analysisId)>1){
+      effectTypeTrait <- phenoDTfile$modeling[which(phenoDTfile$modeling$analysisId %in% analysisId & phenoDTfile$modeling$trait == iTrait & phenoDTfile$modeling$parameter == "designationEffectType"),"value"]
+    }else{
+      effectTypeTrait <- phenoDTfile$modeling[which(phenoDTfile$modeling$analysisId == analysisId & phenoDTfile$modeling$trait == iTrait & phenoDTfile$modeling$parameter == "designationEffectType"),"value"]
+    }
     if (names(sort(table(effectTypeTrait), decreasing = TRUE))[1] == "BLUP") {
       # if STA was BLUPs deregress
       mydataSub$predictedValue <- mydataSub$predictedValue / mydataSub$reliability
