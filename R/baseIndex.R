@@ -55,17 +55,19 @@ baseIndex <- function(
   )
   ##########################################
   ## add timePoint of origin, stage and designation code
-  entries <- unique(phenoDTfilePred[,"designation"])
-  baseOrigin <- do.call(rbind, apply(data.frame(entries),1,function(x){
-    out1 <- (sort(phenoDTfilePred[which(phenoDTfilePred$designation %in% x),"gid"], decreasing = FALSE))[1]
-    out2 <- (sort(phenoDTfilePred[which(phenoDTfilePred$designation %in% x),"mother"], decreasing = FALSE))[1]
-    out3 <- (sort(phenoDTfilePred[which(phenoDTfilePred$designation %in% x),"father"], decreasing = FALSE))[1]
-    out4 <- paste(unique(sort(phenoDTfilePred[which(phenoDTfilePred$designation %in% x),"pipeline"], decreasing = FALSE)),collapse=", ")
-    out5 <- paste(unique(sort(phenoDTfilePred[which(phenoDTfilePred$designation %in% x),"entryType"], decreasing = FALSE)),collapse=", ")
-    out6 <- paste(unique(sort(phenoDTfilePred[which(phenoDTfilePred$designation %in% x),"effectType"], decreasing = FALSE)),collapse=", ")
-    y <- data.frame(designation=x,gid=out1,mother=out2,father=out3,pipeline=out4, entryType=out5, effectType=out6)
-    return(y)
-  }))
+  ## vectorized baseOrigin computation (replaces row-by-row apply loop)
+  .first_sorted <- function(x) (sort(x, decreasing = FALSE, na.last = TRUE))[1]
+  .collapse_unique <- function(x) paste(unique(sort(x, decreasing=FALSE)), collapse=", ")
+  boGid    <- aggregate(phenoDTfilePred[,"gid",       drop=FALSE], by=list(designation=phenoDTfilePred[,"designation"]), FUN=.first_sorted)
+  boMother <- aggregate(phenoDTfilePred[,"mother",    drop=FALSE], by=list(designation=phenoDTfilePred[,"designation"]), FUN=.first_sorted)
+  boFather <- aggregate(phenoDTfilePred[,"father",    drop=FALSE], by=list(designation=phenoDTfilePred[,"designation"]), FUN=.first_sorted)
+  boPipe   <- aggregate(phenoDTfilePred[,"pipeline",  drop=FALSE], by=list(designation=phenoDTfilePred[,"designation"]), FUN=.collapse_unique)
+  boEntry  <- aggregate(phenoDTfilePred[,"entryType", drop=FALSE], by=list(designation=phenoDTfilePred[,"designation"]), FUN=.collapse_unique)
+  boEffect <- aggregate(phenoDTfilePred[,"effectType",drop=FALSE], by=list(designation=phenoDTfilePred[,"designation"]), FUN=.collapse_unique)
+  baseOrigin <- data.frame(designation=boGid$designation, gid=boGid$gid,
+                           mother=boMother$mother, father=boFather$father,
+                           pipeline=boPipe$pipeline, entryType=boEntry$entryType,
+                           effectType=boEffect$effectType, stringsAsFactors=FALSE)
   predictionsBind <- merge(baseIndex,baseOrigin, by="designation", all.x=TRUE)
   predictionsBind$module <- "indexB"
   if(length(which(predictionsBind$designation=="."))!=0){predictionsBind=predictionsBind[-which(predictionsBind$designation=="."),]}

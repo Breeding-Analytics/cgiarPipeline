@@ -76,17 +76,19 @@ indexDesire <- function(
                        environment=paste(environmentToUse, collapse="_") )
   ##########################################
   ## add timePoint of origin, stage and designation code
-  entries <- unique(mydata[,"designation"])
-  baseOrigin <- do.call(rbind, apply(data.frame(entries),1,function(x){
-    out1 <- (sort(mydata[which(mydata$designation %in% x),"gid"], decreasing = FALSE))[1]
-    out2 <- (sort(mydata[which(mydata$designation %in% x),"mother"], decreasing = FALSE))[1]
-    out3 <- (sort(mydata[which(mydata$designation %in% x),"father"], decreasing = FALSE))[1]
-    out4 <- paste(unique(sort(mydata[which(mydata$designation %in% x),"pipeline"], decreasing = FALSE)),collapse=", ")
-    out5 <- paste(unique(sort(mydata[which(mydata$designation %in% x),"entryType"], decreasing = FALSE)),collapse=", ")
-    out6 <- paste(unique(sort(mydata[which(mydata$designation %in% x),"effectType"], decreasing = FALSE)),collapse=", ")
-    y <- data.frame(designation=x,gid=out1,mother=out2,father=out3,pipeline=out4, entryType=out5, effectType=out6)
-    return(y)
-  }))
+  ## vectorized baseOrigin computation (replaces row-by-row apply loop)
+  .first_sorted <- function(x) (sort(x, decreasing = FALSE, na.last = TRUE))[1]
+  .collapse_unique <- function(x) paste(unique(sort(x, decreasing=FALSE)), collapse=", ")
+  boGid    <- aggregate(mydata[,"gid",       drop=FALSE], by=list(designation=mydata[,"designation"]), FUN=.first_sorted)
+  boMother <- aggregate(mydata[,"mother",    drop=FALSE], by=list(designation=mydata[,"designation"]), FUN=.first_sorted)
+  boFather <- aggregate(mydata[,"father",    drop=FALSE], by=list(designation=mydata[,"designation"]), FUN=.first_sorted)
+  boPipe   <- aggregate(mydata[,"pipeline",  drop=FALSE], by=list(designation=mydata[,"designation"]), FUN=.collapse_unique)
+  boEntry  <- aggregate(mydata[,"entryType", drop=FALSE], by=list(designation=mydata[,"designation"]), FUN=.collapse_unique)
+  boEffect <- aggregate(mydata[,"effectType",drop=FALSE], by=list(designation=mydata[,"designation"]), FUN=.collapse_unique)
+  baseOrigin <- data.frame(designation=boGid$designation, gid=boGid$gid,
+                           mother=boMother$mother, father=boFather$father,
+                           pipeline=boPipe$pipeline, entryType=boEntry$entryType,
+                           effectType=boEffect$effectType, stringsAsFactors=FALSE)
   predictionsBind <- merge(newped,baseOrigin, by="designation", all.x=TRUE)
   predictionsBind$module <- "indexD"
   if(length(which(predictionsBind$designation=="."))!=0){predictionsBind=predictionsBind[-which(predictionsBind$designation=="."),]}

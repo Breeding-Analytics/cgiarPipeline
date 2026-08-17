@@ -116,7 +116,16 @@ metLMMsolver <- function(
   if(is.null(analysisId)){stop("Please provide the STA analysisId to be analyzed", call. = FALSE)}
   if(is.null(trait)){stop("Please provide traits to be analyzed", call. = FALSE)}else{
     baseData <- phenoDTfile$predictions[which(phenoDTfile$predictions$analysisId %in% analysisId ),]
-    if(length(intersect(trait, unique(baseData[,"trait"]))) == 0){stop("The traits you have specified are not present in the analysisId provided.", call. = FALSE)}
+    # For TPP traits, resolve pheno_trait names for validation
+    traitsToCheck <- trait
+    tpp_config_check <- phenoDTfile$metadata$tpp_analysis_config
+    if (!is.null(tpp_config_check) && !is.null(tpp_config_check$trait_map)) {
+      traitsToCheck <- unique(c(
+        trait,
+        unlist(tpp_config_check$trait_map[intersect(names(tpp_config_check$trait_map), trait)])
+      ))
+    }
+    if(length(intersect(traitsToCheck, unique(baseData[,"trait"]))) == 0){stop("The traits you have specified are not present in the analysisId provided.", call. = FALSE)}
   }
   if(is.null(traitFamily)){traitFamily <- rep("quasi(link = 'identity', variance = 'constant')", length(trait))}
   if(!is.null(randomTerm)){
@@ -475,20 +484,54 @@ metLMMsolver <- function(
   metrics <- phenoDTfile$metrics
   metrics <- metrics[which(metrics$analysisId %in% analysisId),]
   myDataTraits <- fixedTermTrait <- randomTermTrait <- groupingTermTrait <- Mtrait <- envsTrait <- entryTypesTrait <- envCount <- list()
+  tppActualTraitMap <- list()  # stores iTrait -> actual_trait mapping for TPP traits
   for(iTrait in trait){ # iTrait = trait[1]
-    # filter for records available
-    vt <- which(mydata[,"trait"] == iTrait)
+    # --- TPP trait resolution ---
+    tpp_config <- phenoDTfile$metadata$tpp_analysis_config
+    actual_trait <- iTrait
+    tpp_env_filter <- NULL
+
+    if (!is.null(tpp_config) && iTrait %in% names(tpp_config$trait_map)) {
+      actual_trait <- tpp_config$trait_map[[iTrait]]
+      tpp_env_filter <- tpp_config$env_map[[iTrait]]
+    }
+    tppActualTraitMap[[iTrait]] <- actual_trait
+    # --- End TPP trait resolution ---
+
+    # filter for records available (use actual_trait for data lookup)
+    vt <- which(mydata[,"trait"] == actual_trait)
     if(length(vt) > 0){ # we have data for the trait
       prov <- mydata[vt,]
-      # filter by the environments to include
-      vte <- which(prov[,"environment"] %in% rownames(envsToInclude)[as.logical(envsToInclude[,iTrait])])
+      # --- TPP environment filter: create per-iteration local copy ---
+      envsToIncludeLocal <- envsToInclude
+      if (!is.null(tpp_env_filter)) {
+        valid_envs <- intersect(tpp_env_filter, rownames(envsToIncludeLocal))
+        if (length(valid_envs) < 2) {
+          warning(paste("TPP trait", iTrait, "skipped: fewer than 2 environments after filtering."))
+          next
+        }
+        # Log info if some env_filter environments not found in data
+        missing_envs <- setdiff(tpp_env_filter, rownames(envsToIncludeLocal))
+        if (length(missing_envs) > 0) {
+          message(paste("TPP trait", iTrait, ": env_filter environments not found in data:",
+                        paste(missing_envs, collapse = ", ")))
+        }
+        # Zero out environments not in the filter for the actual_trait column
+        if (actual_trait %in% colnames(envsToIncludeLocal)) {
+          envs_to_zero <- setdiff(rownames(envsToIncludeLocal), valid_envs)
+          envsToIncludeLocal[envs_to_zero, actual_trait] <- 0
+        }
+      }
+      # --- End TPP environment filter ---
+      # filter by the environments to include (use actual_trait for column lookup)
+      vte <- which(prov[,"environment"] %in% rownames(envsToIncludeLocal)[as.logical(envsToIncludeLocal[,actual_trait])])
       prov <- prov[vte,]
-      # remove bad environment based on h2 and r2
-      pipeline_metricsSub <- metrics[which(metrics$trait == iTrait & metrics$parameter %in% c("plotH2","H2","meanR2","r2", apply(expand.grid( c("plotH2","H2","meanR2","r2"), c("designation","mother","father")),1,function(f){paste(f,collapse = "_")}) )),]
+      # remove bad environment based on h2 and r2 (use actual_trait for metrics lookup)
+      pipeline_metricsSub <- metrics[which(metrics$trait == actual_trait & metrics$parameter %in% c("plotH2","H2","meanR2","r2", apply(expand.grid( c("plotH2","H2","meanR2","r2"), c("designation","mother","father")),1,function(f){paste(f,collapse = "_")}) )),]
       goodFields <- unique(pipeline_metricsSub[which((pipeline_metricsSub$value >= heritLB[iTrait]) & (pipeline_metricsSub$value <= heritUB[iTrait])),"environment"])
       prov <- prov[which(prov$environment %in% goodFields),]
-      # remove bad environment based on environment means
-      pipeline_metricsSub <- metrics[which(metrics$trait == iTrait & metrics$parameter %in% c("plotH2","H2","meanR2","r2", apply(expand.grid( c("mean"), c("designation","mother","father")),1,function(f){paste(f,collapse = "_")}) ) ),]
+      # remove bad environment based on environment means (use actual_trait for metrics lookup)
+      pipeline_metricsSub <- metrics[which(metrics$trait == actual_trait & metrics$parameter %in% c("plotH2","H2","meanR2","r2", apply(expand.grid( c("mean"), c("designation","mother","father")),1,function(f){paste(f,collapse = "_")}) ) ),]
       goodFieldsMean <- unique(pipeline_metricsSub[which((pipeline_metricsSub$value > meanLB[iTrait]) & (pipeline_metricsSub$value < meanUB[iTrait])),"environment"])
       prov <- prov[which(prov$environment %in% goodFieldsMean),]
       envCount[[iTrait]] <- unique(prov$environment)
@@ -589,6 +632,29 @@ metLMMsolver <- function(
           expCovariatesProv <- expCovariates[goodTerms]
           if (!"genoD" %in% unlist(expCovariatesProv)) {
             randomTermProv <- unique(randomTermProv)
+          }
+          
+          ## Fix covariance-term alignment for Finlay-Wilkinson and similar models.
+          ## Shiny multi-select returns values in choices-order, which can misalign
+          ## the positional pairing between randomTerm and expCovariates vectors.
+          ## Ensure relationship kernels align with 'designation' and 'none' with 'envIndex'.
+          kernel_types <- c("geno", "genoA", "genoAD", "genoD", "pedigree", "weather")
+          for (ii in seq_along(randomTermProv)) {
+            rt <- randomTermProv[[ii]]
+            ec <- expCovariatesProv[[ii]]
+            if (length(rt) == length(ec) && length(rt) >= 2 &&
+                "designation" %in% rt && "envIndex" %in% rt) {
+              desig_idx <- which(rt == "designation")
+              env_idx   <- which(rt == "envIndex")
+              # Check if a kernel-type covariate is misaligned with envIndex
+              if (ec[env_idx] %in% kernel_types && grepl("^none", ec[desig_idx])) {
+                # Swap: put the kernel on designation, none on envIndex
+                tmp <- ec[desig_idx]
+                ec[desig_idx] <- ec[env_idx]
+                ec[env_idx] <- tmp
+                expCovariatesProv[[ii]] <- ec
+              }
+            }
           }
           
           use_formula = all_none_covariates(unlist(expCovariatesProv))
@@ -778,6 +844,10 @@ metLMMsolver <- function(
                     }else{
                       xx <- sommer::ism(prov[,randomTermProv2[irandom2]])$Z
                     }
+                    # For numeric covariates with a 1x1 identity kernel, align column names
+                    if(ncol(xx) == 1 && ncol(M) == 1){
+                      colnames(xx) <- colnames(M)
+                    }
                   }
                   
                   xxList[[irandom2]] = xx # model matrix for ith effect saved
@@ -922,10 +992,12 @@ metLMMsolver <- function(
     randomTermSub <- randomTermTrait[[iTrait]] # extract random formula
     ## deregress if needed
     VarFull <- var(mydataSub[,"predictedValue"], na.rm = TRUE) # total variance
+    # Use actual_trait (pheno_trait) for modeling lookup from STA results
+    modelingLookupTrait <- if (!is.null(tppActualTraitMap[[iTrait]])) tppActualTraitMap[[iTrait]] else iTrait
     if(length(analysisId)>1){
-      effectTypeTrait <- phenoDTfile$modeling[which(phenoDTfile$modeling$analysisId %in% analysisId & phenoDTfile$modeling$trait == iTrait & phenoDTfile$modeling$parameter == "designationEffectType"),"value"]
+      effectTypeTrait <- phenoDTfile$modeling[which(phenoDTfile$modeling$analysisId %in% analysisId & phenoDTfile$modeling$trait == modelingLookupTrait & phenoDTfile$modeling$parameter == "designationEffectType"),"value"]
     }else{
-      effectTypeTrait <- phenoDTfile$modeling[which(phenoDTfile$modeling$analysisId == analysisId & phenoDTfile$modeling$trait == iTrait & phenoDTfile$modeling$parameter == "designationEffectType"),"value"]
+      effectTypeTrait <- phenoDTfile$modeling[which(phenoDTfile$modeling$analysisId == analysisId & phenoDTfile$modeling$trait == modelingLookupTrait & phenoDTfile$modeling$parameter == "designationEffectType"),"value"]
     }
    
     if(names(sort(table(effectTypeTrait), decreasing = TRUE))[1] == "BLUP"){ # if STA was BLUPs deregress
@@ -999,6 +1071,7 @@ metLMMsolver <- function(
     # print(mix$VarDf)
 
     pp <- list()
+    ss <- NULL # initialize ss to NULL for each trait so we can detect model failure later
     if(!inherits(mix,"try-error") ){ 
       
       ## save the modeling used
@@ -1608,10 +1681,17 @@ metLMMsolver <- function(
       predictionsTrait <- rbind(predictionsTrait, provx[,colnames(predictionsTrait)])
     }
     #
+    # Use actual_trait (pheno_trait) for predSta query, but keep iTrait for output labeling
+    predSta_trait <- if (!is.null(tppActualTraitMap[[iTrait]])) tppActualTraitMap[[iTrait]] else iTrait
     predSta <- phenoDTfile$predictions[which(phenoDTfile$predictions$analysisId %in% analysisId &
-                                               phenoDTfile$predictions$trait == iTrait &
+                                               phenoDTfile$predictions$trait == predSta_trait &
                                                phenoDTfile$predictions$environment %in% envCount[[iTrait]]),]
-    ## Save variance-component metrics
+    ## Save variance-component metrics (only when model succeeded and 'ss' exists)
+    
+    if (is.null(ss)) {
+      # Model failed path: build a minimal ss with just the residual variance
+      ss <- data.frame(VarComp = "residual", Variance = Ve, row.names = "residual")
+    }
     
     ss_metrics <- ss
     
@@ -1689,7 +1769,7 @@ metLMMsolver <- function(
     
     phenoDTfile$metrics <- rbind(
       phenoDTfile$metrics,
-      metric_vc[, colnames(phenoDTfile$metrics)],
+      if (!is.null(metric_vc)) metric_vc[, colnames(phenoDTfile$metrics)] else NULL,
       metric_base[, colnames(phenoDTfile$metrics)]
     )
     predictionsList[[iTrait]] <- predictionsTrait
@@ -1702,15 +1782,22 @@ metLMMsolver <- function(
   ##########################################
   ## add timePoint of origin, stage and designation code
   if(verbose){message("Wrapping the results.")}
-  entries <- unique(mydata[,"designation"])
-  baseOrigin <- do.call(rbind, apply(data.frame(entries),1,function(x){
-    out1 <- (sort(mydata[which(mydata$designation %in% x),"gid"], decreasing = FALSE))[1]
-    out2 <- (sort(mydata[which(mydata$designation %in% x),"mother"], decreasing = FALSE))[1]
-    out3 <- (sort(mydata[which(mydata$designation %in% x),"father"], decreasing = FALSE))[1]
-    out4 <- paste(unique(sort(mydata[which(mydata$designation %in% x),"pipeline"], decreasing = FALSE)),collapse=", ")
-    y <- data.frame(designation=x,gid=out1,mother=out2,father=out3,pipeline=out4)
-    return(y)
-  }))
+  ## vectorized baseOrigin computation (replaces row-by-row apply loop)
+  .first_sorted <- function(x) (sort(x, decreasing = FALSE, na.last = TRUE))[1]
+  boGid    <- aggregate(mydata[,"gid",    drop=FALSE], by=list(designation=mydata[,"designation"]), FUN=.first_sorted)
+  boMother <- aggregate(mydata[,"mother", drop=FALSE], by=list(designation=mydata[,"designation"]), FUN=.first_sorted)
+  boFather <- aggregate(mydata[,"father", drop=FALSE], by=list(designation=mydata[,"designation"]), FUN=.first_sorted)
+  if("pipeline" %in% colnames(mydata)){
+    boPipe <- aggregate(mydata[,"pipeline", drop=FALSE], by=list(designation=mydata[,"designation"]),
+                        FUN=function(x) paste(unique(sort(x, decreasing=FALSE)), collapse=", "))
+    baseOrigin <- data.frame(designation=boGid$designation, gid=boGid$gid,
+                             mother=boMother$mother, father=boFather$father,
+                             pipeline=boPipe$pipeline, stringsAsFactors=FALSE)
+  } else {
+    baseOrigin <- data.frame(designation=boGid$designation, gid=boGid$gid,
+                             mother=boMother$mother, father=boFather$father,
+                             pipeline=NA_character_, stringsAsFactors=FALSE)
+  }
   predictionsBind <- merge(predictionsBind,baseOrigin, by="designation", all.x=TRUE)
   predictionsBind$module <- "mtaLmms"; rownames(predictionsBind) <- NULL
 

@@ -848,7 +848,14 @@ runInitialProdAdv <- function(analysisId = as.numeric(Sys.time()),
       if (is.null(check_entry_type_value)) {
         stop("Checks are required when using a '% over check' trait threshold.")
       }
-      check_value <- mean(trait_value[mta_preds_long$entryType == check_entry_type_value], na.rm = TRUE)
+      # Use specific reference checks if provided, otherwise fall back to all checks
+      if (!is.null(trait_rules$referenceCheck) && length(trait_rules$referenceCheck) > 0 &&
+          any(nzchar(trait_rules$referenceCheck))) {
+        ref_desigs <- trait_rules$referenceCheck
+        check_value <- mean(trait_value[mta_preds_long$designation %in% ref_desigs], na.rm = TRUE)
+      } else {
+        check_value <- mean(trait_value[mta_preds_long$entryType == check_entry_type_value], na.rm = TRUE)
+      }
       if (is.null(trait_rules$direction) || is.na(trait_rules$direction) || trait_rules$direction == "Higher is better") {
         target <- check_value + check_value * (trait_rules$threshold / 100)
         decision <- ifelse(trait_value >= target, "SELECTED", "NOT SELECTED")
@@ -928,7 +935,8 @@ runInitialProdAdv <- function(analysisId = as.numeric(Sys.time()),
       if (!is.null(trait_rules_t$ruleType)) trait_rules_t$ruleType else "None",
       .null_or_name(trait_rules_t$direction, trait_rules_t$direction),
       .null_or_name(trait_rules_t$threshold, as.character(trait_rules_t$threshold)),
-      .null_or_name(trait_rules_t$referenceCheck, trait_rules_t$referenceCheck),
+      .null_or_name(trait_rules_t$referenceCheck,
+                    paste(trait_rules_t$referenceCheck, collapse = ",")),
       .null_or_name(trait_rules_t$minValue, as.character(trait_rules_t$minValue)),
       .null_or_name(trait_rules_t$maxValue, as.character(trait_rules_t$maxValue))
     )
@@ -994,6 +1002,20 @@ runInitialProdAdv <- function(analysisId = as.numeric(Sys.time()),
       stringsAsFactors = FALSE
     )
     modeling <- rbind(modeling, flag_rows)
+  }
+
+  # Record the TPP ID used for this initial selection (if any)
+  if (!is.null(args$tppId) && nzchar(args$tppId)) {
+    tpp_row <- data.frame(
+      module = "Init_prodAdv",
+      analysisId = analysisId,
+      trait = NA,
+      environment = NA,
+      parameter = "tpp_id",
+      value = args$tppId,
+      stringsAsFactors = FALSE
+    )
+    modeling <- rbind(modeling, tpp_row)
   }
 
   # ---- Create status table ----
