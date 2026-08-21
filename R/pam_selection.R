@@ -771,6 +771,11 @@ runInitialProdAdv <- function(analysisId = as.numeric(Sys.time()),
   }
 
   scaled_matrix <- scale(mta_preds_matrix)
+  # Replace NAs in zero-weight columns to prevent NA*0=NA propagation in index
+  zero_weight_cols <- which(index_weights == 0)
+  if (length(zero_weight_cols) > 0) {
+    scaled_matrix[, zero_weight_cols][is.na(scaled_matrix[, zero_weight_cols])] <- 0
+  }
   # Apply reliability penalty: element-wise multiplication with sqrt(reliability)
   reliability_penalized <- scaled_matrix * sqrt(rel_matrix)
   index_preds <- reliability_penalized %*% index_weights
@@ -1504,6 +1509,12 @@ build_prodadv_decision_table_data <- function(dt,
       scaled_matrix <- scale(trait_matrix)
       w <- index_weights[avail_traits]
       
+      # Replace NAs in zero-weight columns to prevent NA*0=NA propagation in index
+      zero_weight_cols <- which(w == 0)
+      if (length(zero_weight_cols) > 0) {
+        scaled_matrix[, zero_weight_cols][is.na(scaled_matrix[, zero_weight_cols])] <- 0
+      }
+      
       # Apply reliability weighting (same as runInitialProdAdv)
       if ("reliability" %in% colnames(preds)) {
         preds_review <- preds[preds$designation %in% review_designations, , drop = FALSE]
@@ -1847,6 +1858,12 @@ build_prodadv_review_plot_data <- function(dt,
   selected_traits <- unique(modeling_init$trait[!is.na(modeling_init$trait)])
   selected_traits <- selected_traits[nzchar(selected_traits)]
   
+  # Exclude traits marked as user_excluded_trait
+  excluded_trait_rows <- modeling_init[modeling_init$parameter == "user_excluded_trait", , drop = FALSE]
+  if (nrow(excluded_trait_rows) > 0) {
+    selected_traits <- setdiff(selected_traits, excluded_trait_rows$trait)
+  }
+  
   if (length(selected_traits) == 0) {
     stop("No traits found in the modeling table for this selection stamp.")
   }
@@ -2182,6 +2199,9 @@ apply_prodadv_trait_rule <- function(trait_df, rule_def, check_entry_type_value 
   if (!is.null(check_entry_type_value)) {
     decision[trait_df$entryType == check_entry_type_value] <- "CHECK"
   }
+  
+  # Ensure no NA decisions remain (can happen when trait_value is NA)
+  decision[is.na(decision)] <- "NOT SELECTED"
   
   data.frame(
     designation = trait_df$designation,
