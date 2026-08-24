@@ -255,7 +255,10 @@ staLMM <- function(
 
             newRandom <- if(length(screened$kept) > 0) screened$kept else NULL
             
-            if(resid_screen$use_residual){
+            rowPasses <- "rowF" %in% resid_screen$kept
+            colPasses <- "colF" %in% resid_screen$kept
+            
+            if(rowPasses && colPasses){
               newSpline <- as.formula(
                 paste(
                   "~spl2D(x1 = row, x2 = col, nseg = c(",
@@ -263,6 +266,14 @@ staLMM <- function(
                   min(c(round(ncol(gridCheck) / 2), 10)),
                   ") )"
                 )
+              )
+            } else if(rowPasses){
+              newSpline <- as.formula(
+                paste("~spl1D(x = row, nseg =", min(c(round(nrow(gridCheck) / 2), 10)), ")")
+              )
+            } else if(colPasses){
+              newSpline <- as.formula(
+                paste("~spl1D(x = col, nseg =", min(c(round(ncol(gridCheck) / 2), 10)), ")")
               )
             } else {
               newSpline <- NULL
@@ -276,8 +287,8 @@ staLMM <- function(
               #
               ranran <- paste(c(myGeneticUnit, unique(intersect(randomTermForRanModel,newRandom)) ), collapse = " + ")
               randomFormulaForRanModel <- paste("~",ranran)
-              # at least one condition met: replicated random terms, or replicated fixed terms
-              if((length(screened$kept) > 0)  | (median(table(mydataSub[,iGenoUnit]), na.rm=TRUE) > 1.5) ){
+              # at least one condition met: replicated random terms, replicated fixed terms, or spatial spline available
+              if((length(screened$kept) > 0)  | (median(table(mydataSub[,iGenoUnit]), na.rm=TRUE) > 1.5) | (!is.null(newSpline)) ){
 
                 mixRandom <- try( # first model with genotypes as random
                   LMMsolver::LMMsolve(fixed =as.formula(fixedFormulaForRanModel),
@@ -297,8 +308,8 @@ staLMM <- function(
                   columnsToAdd <- unique(c(columnsToAdd, paste(iTrait,"residual",sep="-")))
                   mydata[whereResidualGoes,paste(iTrait,"residual",sep="-")] <- mixRandom$residuals[,1]
                   sm <- summary(mixRandom, which = "variances")
-                  newRanran <- setdiff( (sm[,1])[which(sm[,2] >0.05)] , c("residual",genoUnitTraitField,"s(row, col)"))
-                  removedTerms <- setdiff( setdiff(sm[,1],c("residual",genoUnitTraitField) ) , newRanran ) # to inform users that these were removed
+                  newRanran <- setdiff( (sm[,1])[which(sm[,2] >0.05)] , c("residual",genoUnitTraitField,"s(row, col)","s(row)","s(col)"))
+                  removedTerms <- setdiff( setdiff(sm[,1],c("residual",genoUnitTraitField,"s(row, col)","s(row)","s(col)") ) , newRanran ) # to inform users that these were removed
 
                   ranran <- paste("~",paste(c(newRanran), collapse=" + "))
                   if(ranran=="~ "){randomFormulaForFixedModel=NULL}else{randomFormulaForFixedModel <- as.formula(ranran)}
