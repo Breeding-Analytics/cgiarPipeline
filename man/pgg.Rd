@@ -14,6 +14,7 @@ pgg(
     trait=NULL, # per trait
     by=NULL,
     percentage=10,
+    cycleTime=NULL,
     verbose=TRUE
 )
 }
@@ -33,6 +34,9 @@ The column by which partitions of the data should be built to extract the metric
 }
 \item{percentage}{
 Percentage of selected individuals to assume.
+}
+\item{cycleTime}{
+Time in years to complete one breeding cycle (from crossing until the selection of the new parents). Can be several years (e.g. 5) or less than a year (e.g. 0.5). Used to express the predicted genetic gain as a per-year rate (PGG/year = PGG / cycleTime). Defaults to 1 if not provided.
 }
 \item{verbose}{
 Should the logs or warninig messages of the analysis be printed?

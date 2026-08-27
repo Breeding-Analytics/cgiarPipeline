@@ -22,6 +22,15 @@ metASREML <- function(phenoDTfile = NULL,
   #save(phenoDTfile,analysisId,analysisIdgeno,fixedTerm,randomTerm,covMod, addG, nFA,envsToInclude, trait, traitFamily, useWeights,calculateSE, heritLB,  heritUB, meanLB, meanUB, maxIters,  verbose, file="NewAsr.RData")
   #library(asreml)
   '%!in%' <- function(x, y){! ('%in%'(x, y))}
+  ## Scale a relationship matrix so mean(diag(K)) = 1.
+  ## This puts the REML variance component on the individual (genetic value) scale
+  ## and matches the kernel scaling used by metLMMsolver.
+  .scale_mean_diag1 <- function(K) {
+    Km <- as.matrix(K)
+    d  <- mean(diag(Km), na.rm = TRUE)
+    if (!is.finite(d) || d <= 1e-12) return(Km)
+    Km / d
+  }
   covMod <- lapply(covMod, gsub, pattern = "\\.", replacement = "")
   addG <- covMod
   ## THIS FUNCTION PERFORMS A MULT TRIAL ANALYSIS USING asreml
@@ -151,13 +160,27 @@ metASREML <- function(phenoDTfile = NULL,
   covars<-unlist(covMod)
   randomTermForCovars<-randomTermForCovars[[1]]
   fixedTermForCovars <- setdiff(unique(unlist(fixedTerm)), c("environment", "designation"))
-  G=D=N=Gad=WI=NULL
+  G=D=N=Gad=WI=Gm=Gf=Gd=NULL
   
   if (any(covkernel %in% covars)) {
     #New structure Geno info
     if (class(phenoDTfile$data$geno)[1] == "genlight") {
-      qas <- which(names(phenoDTfile$data$geno_imp) == analysisIdgeno)
-      Markers <- as.data.frame(phenoDTfile$data$geno_imp[qas])
+      # Match analysisIdgeno to geno_imp names (handle numeric precision differences)
+      geno_imp_names <- names(phenoDTfile$data$geno_imp)
+      qas <- which(geno_imp_names == as.character(analysisIdgeno))
+      if (length(qas) == 0) {
+        # Try matching by rounding both sides to handle precision issues
+        qas <- which(round(as.numeric(geno_imp_names)) == round(as.numeric(analysisIdgeno)))
+      }
+      if (length(qas) > 0) {
+        Markers <- as.data.frame(phenoDTfile$data$geno_imp[qas])
+      } else {
+        # No match found: use raw genlight data (same fallback as metLMMsolver)
+        Markers <- as.matrix(phenoDTfile$data$geno)
+        if(length(which(is.na(Markers))) > 0){
+          stop("Markers have missing data and the genotype QA/QC Id did not match. Please verify you selected the correct Genotype QA/QC version.", call. = FALSE)
+        }
+      }
     } else{#Old structure Geno info
       qas <- which(phenoDTfile$status$module == "qaGeno")
       qas <- qas[length(qas)]
@@ -187,12 +210,9 @@ metASREML <- function(phenoDTfile = NULL,
       }
       MarkersAm <- Markers[intersect(rownames(Markers), c(males)), ]
       G <- sommer::A.mat(as.matrix(MarkersAm - ploidyFactor))
-      missing <- setdiff(c(males), rownames(G))
-      A1m <- diag(mean(diag(G)),
-                  nrow = length(missing),
-                  ncol = length(missing))
-      rownames(A1m) <- colnames(A1m) <- missing
-      G <- enhancer::adiag1(G, A1m)
+      # Individuals without marker data are dropped from the analysis (see kernelLevels
+      # filter in the trait loop) rather than padded with a diagonal block.
+      G <- .scale_mean_diag1(G)
       Gm <- G + diag(1e-5, ncol(G), ncol(G))
     } # additive model mother
     if ("Relationship structure_GenoA_father" %in% covars) {
@@ -206,12 +226,7 @@ metASREML <- function(phenoDTfile = NULL,
       }
       MarkersAf <- Markers[intersect(rownames(Markers), c(males)), ]
       G <- sommer::A.mat(as.matrix(MarkersAf - ploidyFactor))
-      missing <- setdiff(c(males), rownames(G))
-      A1m <- diag(mean(diag(G)),
-                  nrow = length(missing),
-                  ncol = length(missing))
-      rownames(A1m) <- colnames(A1m) <- missing
-      G <- enhancer::adiag1(G, A1m)
+      G <- .scale_mean_diag1(G)
       Gf <- G + diag(1e-5, ncol(G), ncol(G))
     } # additive model father
     if ("Relationship structure_GenoA" %in% covars) {
@@ -225,12 +240,7 @@ metASREML <- function(phenoDTfile = NULL,
         }
         MarkersA <- Markers[intersect(rownames(Markers), c(males)), ]
         G <- sommer::A.mat(as.matrix(MarkersA - ploidyFactor))
-        missing <- setdiff(c(males), rownames(G))
-        A1m <- diag(mean(diag(G)),
-                  nrow = length(missing),
-                  ncol = length(missing))
-        rownames(A1m) <- colnames(A1m) <- missing
-        G <- enhancer::adiag1(G, A1m)
+        G <- .scale_mean_diag1(G)
         G <- G + diag(1e-5, ncol(G), ncol(G))
     } # additive model
     if ("Relationship structure_GenoD" %in% covars) {
@@ -248,12 +258,7 @@ metASREML <- function(phenoDTfile = NULL,
         f <- rowSums(D) / ncol(D) #inbreeding fixed eff
         names(f) <- rownames(MarkersD)
         D <- sommer::D.mat(as.matrix(D))
-        missing <- setdiff(c(males), rownames(D))
-        A1m <- diag(mean(diag(D)),
-                    nrow = length(missing),
-                    ncol = length(missing))
-        rownames(A1m) <- colnames(A1m) <- missing
-        D <- enhancer::adiag1(D, A1m)
+        D <- .scale_mean_diag1(D)
         Gd <- D + diag(1e-5, ncol(D), ncol(D))
       } else{
         #autopolyploid formula for digenic dominance (Batista et al. 2022)
@@ -282,6 +287,7 @@ metASREML <- function(phenoDTfile = NULL,
         D <- crossprod(Q)
         denomDom <- sum(C_mat[, 1] * MAF^2 * (1 - MAF)^2)
         D <- D / denomDom
+        D <- .scale_mean_diag1(D)
         Gd <- D + diag(1e-5, ncol(D), ncol(D))
       }
     }#Dominance kernel
@@ -296,6 +302,7 @@ metASREML <- function(phenoDTfile = NULL,
       MarkersAD <- Markers[intersect(rownames(Markers), c(males)), ]
       MarkersAD <- apply(MarkersAD + 1, 2, log)
       Gad <- sommer::A.mat(as.matrix(MarkersAD))
+      Gad <- .scale_mean_diag1(Gad)
       Gad <- Gad + diag(1e-5, ncol(Gad), ncol(Gad))
     } # additive + dominance model
     ## PEDIGREE KERNEL
@@ -320,6 +327,26 @@ metASREML <- function(phenoDTfile = NULL,
       #Wchol <- t(chol(W))
     }
   }
+  ## Levels present in each relationship kernel. Individuals absent from the kernel
+  ## are dropped from the trait dataset (mirrors metLMMsolver) instead of being
+  ## padded into the kernel with a diagonal block.
+  kernelLevels <- list()
+  .addKernelLevels <- function(terms, K) {
+    if (is.null(K) || is.null(terms) || length(terms) == 0) return(invisible(NULL))
+    lv <- rownames(as.matrix(K))
+    if (is.null(lv)) return(invisible(NULL))
+    for (tm in terms) {
+      if (is.na(tm) || !nzchar(tm)) next
+      kernelLevels[[tm]] <<- if (is.null(kernelLevels[[tm]])) lv else intersect(kernelLevels[[tm]], lv)
+    }
+    invisible(NULL)
+  }
+  if ("Relationship structure_GenoA"        %in% covars) .addKernelLevels(randomTermForCovars[[2]], G)
+  if ("Relationship structure_GenoA_mother" %in% covars) .addKernelLevels("mother", Gm)
+  if ("Relationship structure_GenoA_father" %in% covars) .addKernelLevels("father", Gf)
+  if ("Relationship structure_GenoD"       %in% covars) .addKernelLevels(randomTermForCovars[[3]], Gd)
+  if ("Relationship structure_GenoAD"      %in% covars) .addKernelLevels(randomTermForCovars[[4]], Gad)
+
   ## COMPLETE THE CLEANING PARAMETERS (7 lines)
   names(traitFamily) <- trait
   heritLB <- rep(heritLB, length(trait))
@@ -429,8 +456,12 @@ metASREML <- function(phenoDTfile = NULL,
     
     if (!is.null(tpp_env_filter)) {
       valid_envs <- intersect(tpp_env_filter, rownames(envsToIncludeLocal))
-      if (length(valid_envs) < 2) {
-        warning(paste("TPP trait", iTrait, "skipped: fewer than 2 environments after filtering."))
+      # Allow single-environment traits when a genomic/pedigree kernel is used
+      # (the model can still estimate GEBVs without multiple environments)
+      has_relationship_kernel <- any(grepl("GenoA|GenoD|GenoAD|Pedigree", unlist(addG)))
+      min_envs_required <- if (has_relationship_kernel) 1L else 2L
+      if (length(valid_envs) < min_envs_required) {
+        warning(paste("TPP trait", iTrait, "skipped: fewer than", min_envs_required, "environments after filtering."))
         next
       }
       # Zero out environments not in the filter for this trait's column
@@ -494,6 +525,21 @@ metASREML <- function(phenoDTfile = NULL,
         prov$inbreeding <- f[match(prov$designation, names(f))]
       }
       
+      ## Drop records whose level is absent from the relationship kernel
+      if (length(kernelLevels) > 0) {
+        for (tm in names(kernelLevels)) {
+          if (tm %in% colnames(prov)) {
+            nBefore <- nrow(prov)
+            prov <- prov[as.character(prov[[tm]]) %in% kernelLevels[[tm]], , drop = FALSE]
+            nDropped <- nBefore - nrow(prov)
+            if (nDropped > 0 && isTRUE(verbose)) {
+              message(paste0("   Trait ", iTrait, ": dropped ", nDropped,
+                             " record(s) with no kernel entry for '", tm, "'"))
+            }
+          }
+        }
+      }
+      
       if (nrow(prov) > 0) {
         # if after filters there's still data for this trait we can continue and save the data
         if (var(prov[, "predictedValue"], na.rm = TRUE) > 0) {
@@ -511,9 +557,17 @@ metASREML <- function(phenoDTfile = NULL,
             if (length(grep("none", fixedTermprov)) != 0) {
               fixedTermprov = fixedTermprov[-grep("none", fixedTermprov)]
             }
+            # Drop fixed terms that have only 1 level in this trait's data
+            # (e.g., 'environment' when trait has a single environment)
+            fixedTermprov <- fixedTermprov[vapply(fixedTermprov, function(ft) {
+              vars <- unlist(strsplit(ft, ":"))
+              all(vapply(vars, function(v) {
+                if (v %in% colnames(prov)) length(unique(prov[[v]])) > 1 else TRUE
+              }, logical(1)))
+            }, logical(1))]
           }
           fixedTermModel[[iTrait]] = fixedTermprov
-          if (length(fixedTermprov) != 0 | !is.null(fixedTermprov)) {
+          if (length(fixedTermprov) > 0) {
             for (iFixed in 1:length(fixedTermprov)) {
               # for each element in the list # iFixed=1
               fixedTermTrait[[iTrait]] <- paste(fixedTermTrait[[iTrait]], fixedTermprov[iFixed], sep =
@@ -584,7 +638,16 @@ metASREML <- function(phenoDTfile = NULL,
     }
     if (names(sort(table(effectTypeTrait), decreasing = TRUE))[1] == "BLUP") {
       # if STA was BLUPs deregress
-      mydataSub$predictedValue <- mydataSub$predictedValue / mydataSub$reliability
+      ## Deregress only where reliability is usable. STA caps reliability at 0, so an
+      ## unguarded division yields Inf; those records keep their BLUP value and are
+      ## down-weighted anyway through the 1/stdError^2 weights.
+      relDeg <- mydataSub$reliability
+      okDeg  <- is.finite(relDeg) & relDeg > 0
+      if (any(!okDeg)) {
+        message(paste(" Skipping deregression for", sum(!okDeg),
+                      "record(s) with non-positive or non-finite reliability"))
+      }
+      mydataSub$predictedValue[okDeg] <- mydataSub$predictedValue[okDeg] / relDeg[okDeg]
     }
     ## calculate weights
     mydataSub <- mydataSub[with(mydataSub, order(environment)), ] # sort by environments
@@ -638,15 +701,26 @@ metASREML <- function(phenoDTfile = NULL,
     family_arg <- eval(parse(text = traitFamily[iTrait]))
     
     # Adjust model with asreml
+    # predict.asreml() re-evaluates in the model's envir; assign everything there
+    assign("mydataSub", mydataSub, envir = .GlobalEnv)
+    assign("w", w, envir = .GlobalEnv)
+    # predict.asreml needs response and all data columns accessible as objects
+    for(.col in names(mydataSub)) assign(.col, mydataSub[[.col]], envir = .GlobalEnv)
+    if(exists("G", inherits=FALSE) && !is.null(G)) assign("G", G, envir = .GlobalEnv)
+    if(exists("Gm", inherits=FALSE) && !is.null(Gm)) assign("Gm", Gm, envir = .GlobalEnv)
+    if(exists("Gf", inherits=FALSE) && !is.null(Gf)) assign("Gf", Gf, envir = .GlobalEnv)
+    if(exists("Gd", inherits=FALSE) && !is.null(Gd)) assign("Gd", Gd, envir = .GlobalEnv)
+    if(exists("Gad", inherits=FALSE) && !is.null(Gad)) assign("Gad", Gad, envir = .GlobalEnv)
+    if(exists("N", inherits=FALSE) && !is.null(N)) assign("N", N, envir = .GlobalEnv)
+    if(exists("WI", inherits=FALSE) && !is.null(WI)) assign("WI", WI, envir = .GlobalEnv)
     tryCatch({
       mix<<-asreml::asreml(
         fixed = fixed_formula,
         random = random_formula,
         data = mydataSub,
-        na.action = na.method(x='include', y='include'),
         maxit = maxIters,
         weights = w,
-        family = family_arg,	
+        family = family_arg,
         envir = .GlobalEnv
       )
     }, 
@@ -704,7 +778,8 @@ metASREML <- function(phenoDTfile = NULL,
     }
     #fixed effect start
     fixTermObt = unlist(fixedTermModel[[iTrait]])
-    if (length(grep("none", fixTermObt)) == 0) {
+    fixTermObt = fixTermObt[fixTermObt != "1"]  # intercept already handled above
+    if (length(grep("none", fixTermObt)) == 0 && length(fixTermObt) > 0) {
       for (iGroupFixed in fixTermObt) {
         # iGroupFixed=unlist(fixedTermModel[[iTrait]])[1]
         pick <- coef(mix)[["fixed"]][grepl(iGroupFixed, rownames(coef(mix)[["fixed"]]))]
@@ -895,11 +970,55 @@ metASREML <- function(phenoDTfile = NULL,
     }
     
     groupingSub = c(subgroupGen, subgroupInt)
+    # Build mapping from vm()-wrapped terms to raw factor names for predict()
+    oriGroupingSub = c(oriGen, subgroupInt)
     if (length(groupingSub)!=0){
-    for (iGroup in groupingSub) {
-      #for( iGroup in names(groupingSub)){ # iGroup=groupingSub[4]
+    for (ig in seq_along(groupingSub)) {
+      iGroup <- groupingSub[ig]
+      # For predict(classify=...), use raw factor names (strip vm()/fa() wrappers)
+      classifyTerm <- oriGroupingSub[ig]
+      if (is.na(classifyTerm) || is.null(classifyTerm)) classifyTerm <- iGroup
+      # Strip vm() and fa() wrappers from each component for classify
+      classifyTerm <- gsub("vm\\(\\s*([^,]+)\\s*,\\s*source\\s*=[^)]*\\)", "\\1", classifyTerm)
+      classifyTerm <- gsub("fa\\(\\s*([^,]+)\\s*,[^)]*\\)", "\\1", classifyTerm)
       
-      blup = predict(mix, classify = iGroup)$pvals
+      blup_result = predict(mix, classify = classifyTerm)
+      blup = blup_result$pvals
+
+      ## --- PEV of the random effects, straight from ASReml -----------------
+      ## mix$vcoeff$random holds the diagonal of the inverse coefficient matrix,
+      ## computed by ASReml during the REML iterations. PEV = vcoeff * sigma2.
+      ## No extra inversion or solve is needed. Same mechanism this file already
+      ## uses for the fixed effects (vcoeff$fixed * sigma2).
+      ## Anchor on the full ASReml term label (iGroup), not on the bare factor name.
+      ## In a GxE model the interaction's variance component and coefficient names also
+      ## contain "designation", so a substring match is ambiguous and silently mixes
+      ## the main effect with the interaction.
+      Var_REML <- NA; uVals <- NULL; pevVals <- NULL; uLevels <- NULL
+      isMainGen <- iGroup %in% subgroupGen
+      if (!is.null(ss) && nrow(ss) > 0) {
+        vc_cand <- rownames(ss)[!grepl("^units!", rownames(ss))]
+        hitVc <- vc_cand[vc_cand == iGroup]
+        if (!length(hitVc)) hitVc <- vc_cand[startsWith(vc_cand, iGroup)]
+        if (!length(hitVc) && length(vc_cand) == 1L) hitVc <- vc_cand
+        if (length(hitVc) > 0) Var_REML <- ss[hitVc[1], "component"]
+      }
+      if (isMainGen) {
+        u_all  <- try(coef(mix)$random, silent = TRUE)
+        vc_all <- mix[["vcoeff"]][["random"]]
+        if (!inherits(u_all, "try-error") && !is.null(vc_all) &&
+            length(vc_all) == nrow(u_all)) {
+          rn    <- rownames(u_all)
+          keepU <- startsWith(rn, paste0(iGroup, "_"))
+          if (any(keepU)) {
+            uVals   <- unname(as.vector(u_all[keepU]))
+            pevVals <- unname(as.vector(vc_all[keepU]) * mix$sigma2)
+            ## strip the "<iGroup>_" prefix by position; iGroup contains regex
+            ## metacharacters such as ( ) , = so sub() is not safe here
+            uLevels <- substring(rn[keepU], nchar(iGroup) + 2L)
+          }
+        }
+      }
       if (all(blup$status == "Aliased")) {
         statusmetrics = "Aliased estimation, problems with the model, please check!"
         stdError <- reliability <- rep(NA, dim(blup)[1])
@@ -907,11 +1026,40 @@ metASREML <- function(phenoDTfile = NULL,
         lsdt <- NA
       } else{
         statusmetrics = mix$converge
-        message(paste(" Calculating standar errors for",iTrait,iGroup,"predictions"))
-        stdError <- blup$std.error # random effect was just one column
-        if (iGroup %in% subgroupGen) {Vg <- var(blup$predicted.value) + ((stdError^2)/length(stdError))} else {Vg<-NA}
-        reliability <- abs((Vg - (stdError^2)) / Vg) # reliability <- abs((Vg - Matrix::diag(pev))/Vg)
-        lsdt <- qt(1 - 0.05 / 2, round(mix$nedf)) * predict(mix, classify =iGroup)$avsed
+        message(paste(" Calculating standar errors for",iTrait,classifyTerm,"predictions"))
+
+        ## Align the PEV diagonal to the rows of the prediction table. Require every
+        ## row to match; a partial match would mix terms, and NA names propagate into
+        ## data.frame() row.names further down.
+        pev_i <- NULL
+        if (!is.null(pevVals) && classifyTerm %in% names(blup)) {
+          mi <- match(as.character(blup[[classifyTerm]]), uLevels)
+          if (!anyNA(mi)) pev_i <- unname(pevVals[mi])
+        }
+        if (is.null(pev_i)) pev_i <- unname(blup$std.error^2)  # fall back to prediction SEs
+
+        stdError <- unname(sqrt(pmax(pev_i, 0)))
+
+        ## PEV-corrected genetic variance (scalar): var(BLUPs) + tr(PEV)/n.
+        ## Uses the random-effect solutions and the coefficient-matrix diagonal,
+        ## so it is on the same footing as the metLMMsolver estimate.
+        if (iGroup %in% subgroupGen && !is.null(uVals)) {
+          Vg_pev <- var(uVals, na.rm = TRUE) + mean(pevVals, na.rm = TRUE)
+        } else if (iGroup %in% subgroupGen) {
+          Vg_pev <- var(blup$predicted.value, na.rm = TRUE) + mean(pev_i, na.rm = TRUE)
+        } else {
+          Vg_pev <- NA
+        }
+
+        ## Reliability against the REML variance component (kernels are scaled to
+        ## mean(diag)=1, so k_ii averages 1)
+        Vg <- if (isMainGen) Var_REML else NA
+        if (!is.na(Vg) && is.finite(Vg) && Vg > 1e-12) {
+          reliability <- unname(1 - (pev_i / Vg))
+        } else {
+          reliability <- rep(NA_real_, length(pev_i))
+        }
+        lsdt <- qt(1 - 0.05 / 2, round(mix$nedf)) * mean(stdError, na.rm = TRUE) * sqrt(2)
       }
       
       badRels <- which(reliability > 1)
@@ -1007,7 +1155,7 @@ metASREML <- function(phenoDTfile = NULL,
           trait = iTrait,
           environment = paste(unique(envTypeSub), collapse = "_"),
           parameter = c(paste(
-            c("mean", "sd", "r2", "Var", "CV%", "LSD95%"),
+            c("mean", "sd", "r2", "Var", "Var_PEVcorr", "CV%", "LSD95%"),
             effTypeSub,
             sep = "_"
           )),
@@ -1016,6 +1164,7 @@ metASREML <- function(phenoDTfile = NULL,
             "sd",
             "(G-PEV)/G",
             "REML",
+            "var(BLUPs)+tr(PEV)/n",
             "(sd/mean)*100",
             "t*avsed"
           ),
@@ -1023,7 +1172,8 @@ metASREML <- function(phenoDTfile = NULL,
             mean(prov[, "predictedValue"], na.rm = TRUE),
             sdP,
             median(reliability),
-            var(prov[, "predictedValue"], na.rm = TRUE),
+            Var_REML,
+            Vg_pev,
             cv,
             lsdt
           ),
@@ -1031,6 +1181,7 @@ metASREML <- function(phenoDTfile = NULL,
             NA,
             NA,
             sd(reliability, na.rm = TRUE) / sqrt(length(reliability)),
+            NA,
             NA,
             NA,
             NA
@@ -1104,12 +1255,18 @@ metASREML <- function(phenoDTfile = NULL,
       )
      )
     
-    testGxE=which(c("environment_designation", "designation_environment",
-                    "environment:designation", "designation:environment") %in% names(pp)==T)
+    ## Index pp by NAME. `which(<names> %in% names(pp))` returns a position in the
+    ## 4-element candidate vector, not in pp, so pp[[testGxE]] picked up the wrong
+    ## element (typically the intercept) and the reshape below then failed.
+    gxeCandidates <- c("environment_designation", "designation_environment",
+                       "environment:designation", "designation:environment")
+    testGxE <- which(names(pp) %in% gxeCandidates)
     if("GenCorrMat" %in% names(pp)){predGenCorrMat<-pp[["GenCorrMat"]];meth1=rep("GenCorrFA",nrow(predGenCorrMat))}else{
       if(length(testGxE)!=0){
-        predGxE<-pp[[testGxE]]
-        df<-tidyr::separate(predGxE,designation,into=c("environment","designation"),sep=":")
+        predGxE<-pp[[testGxE[1]]]
+        df<-tidyr::separate(predGxE,designation,into=c("environment","designation"),
+                            sep=":", extra="merge", fill="right")
+        df<-df[!is.na(df$designation) & !is.na(df$environment), , drop=FALSE]
         wide <- data.frame(tidyr::pivot_wider(df,id_cols = designation,names_from = environment,values_from = predictedValue))
         rownames(wide)<-wide[,1]
         wide<-as.matrix(wide[,-1])
@@ -1324,7 +1481,7 @@ metASREML <- function(phenoDTfile = NULL,
 ##Adding corr traits
   traitL <- lapply(predictionsList, `[`, , c("designation", "effectType","predictedValue"))  
   traitL <- lapply(predictionsList, function(df) {
-    df[df$effectType == "designationIdv",
+    df[grepl("^designation", df$effectType),
        c("designation", "predictedValue"),
        drop = FALSE]
   })  
@@ -1343,20 +1500,23 @@ metASREML <- function(phenoDTfile = NULL,
     predictedValue = CorrMatT[upper],
     environment = colnames(CorrMatT)[upper[,2]]
   )
-  meth2=rep("PearsonCorrelation",nrow(predCorrT))  
-  phenoDTfile$metrics <- rbind(
-    phenoDTfile$metrics,
-    data.frame(
-      module = "mtaAsr",
-      analysisId = mtaAnalysisId,
-      trait = "CorrTrait",
-      environment = "across",
-      parameter = paste0(predCorrT$designation,"_",predCorrT$environment),
-      method = meth2,
-      value = predCorrT$predictedValue,
-      stdError = rep(NA,nrow(predCorrT))
+  # Only write trait correlations when there is at least one trait pair
+  if (nrow(predCorrT) > 0) {
+    meth2=rep("PearsonCorrelation",nrow(predCorrT))
+    phenoDTfile$metrics <- rbind(
+      phenoDTfile$metrics,
+      data.frame(
+        module = "mtaAsr",
+        analysisId = mtaAnalysisId,
+        trait = "CorrTrait",
+        environment = "across",
+        parameter = paste0(predCorrT$designation,"_",predCorrT$environment),
+        method = meth2,
+        value = predCorrT$predictedValue,
+        stdError = rep(NA,nrow(predCorrT))
+      )
     )
-  )
+  }
   
   predictionsBind <- do.call(rbind, predictionsList)
   predictionsBind$analysisId <- mtaAnalysisId

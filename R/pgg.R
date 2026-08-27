@@ -4,7 +4,7 @@ pgg <- function(
     trait=NULL, # per trait
     by=NULL,
     percentage=10,
-    cycle=NULL,
+    cycleTime=NULL, # time in years to complete one breeding cycle (crossing -> selection of new parents)
     verbose=TRUE
 ){
   #save(phenoDTfile,analysisId,trait,by,percentage,verbose,file="pggt.RData")
@@ -15,6 +15,9 @@ pgg <- function(
   if(is.null(analysisId)){stop("Please provide the ID of the analysis to use as input", call. = FALSE)}
   if(is.null(trait)){stop("Please provide traits to be analyzed", call. = FALSE)}
   if(is.null(by)){by <- "environment"}
+  # cycle time (in years) is used to express the predicted genetic gain as a per-year rate
+  if(is.null(cycleTime)){cycleTime <- 1}
+  if(is.na(cycleTime) || cycleTime <= 0){stop("Cycle time must be a positive number of years.", call. = FALSE)}
   ############################
   # loading the dataset
   mydata <- phenoDTfile$predictions
@@ -56,10 +59,22 @@ pgg <- function(
   ## gg analysis
   p <- percentage/100
   i <- dnorm(qnorm(1 - p))/p
+  # The predicted genetic gain is computed on the across-environment predictions
+  # coming from the MTA. Depending on the MTA engine, the across-environment level
+  # is labelled either "(Intercept)" (LMMsolver) or "across" (ASReml/RRBLUP), so we
+  # select it explicitly by name rather than relying on the ordering of unique().
+  acrossLabels <- c("(Intercept)", "across")
+  acrossEnv <- intersect(acrossLabels, unique(mydata[,by]))
+  if(length(acrossEnv) == 0){
+    stop(paste0("No across-environment predictions found for this analysisId (expected the '",
+                by, "' column to contain one of: ", paste(acrossLabels, collapse=", "),
+                "). Predicted genetic gain requires across-environment MTA results."), call. = FALSE)
+  }
+  acrossEnv <- acrossEnv[1] # in the unlikely event both labels are present, keep the first match
   # counter=1
   for(iTrait in trait){ # iTrait = trait[1]
     if(verbose){cat(paste("Analyzing trait", iTrait,"\n"))}
-    uEnvironments <- unique(mydata[,by])[1]
+    uEnvironments <- acrossEnv
     for(uE in uEnvironments){ # uE <- uEnvironments[1]
       # subset data
       if(verbose){cat(paste("Analyzing environment", uE,"\n"))}
@@ -79,22 +94,23 @@ pgg <- function(
       R <- r * sigma * i
       #ggAge =  R/age
       #nTrials = length(unique(mydataSub[,"environment"]))
-      nTrials = length(unique(mydata[,by]))-1
+      # count the real environment levels, excluding the across-environment pseudo-level(s)
+      nTrials = length(setdiff(unique(mydata[,by]), acrossLabels))
       nInds = length(unique(mydataSub[,"designation"]))
       nIndsSelected <- floor(nInds*p)
       ##
       phenoDTfile$metrics <- rbind(phenoDTfile$metrics,
                                    data.frame(module="pgg",analysisId=pggAnalysisId, trait= iTrait, environment=uE,
                                               #parameter=c("r","r2","sigmaG","meanG","min.G","max.G", "cycleLength","i","R","PGG","nEnvs","nInds","nIndsSel"),
-                                              parameter=c("r","r2","sigmaG","meanG","min.G","max.G", "i","PGG",paste("PGG in",cycle,"cycles"),"nEnvs","nInds","nIndsSel"),
+                                              parameter=c("r","r2","sigmaG","meanG","min.G","max.G", "i","PGG","PGG/year","cycleTime(years)","nEnvs","nInds","nIndsSel"),
                                               #method=c("sqrt(r2)","mean((G-PEV)/G)","sd(BLUP)","sum(x)/n","min(x)","max(x)","yearTest-yearOrigin","dnorm(qnorm(1 - p))/p","r*sigma*i","R/cycleLength","sum","sum","nInds*p"),
-                                              method=c("sqrt(r2)","mean((G-PEV)/G)","sd(BLUP)","sum(x)/n","min(x)","max(x)","dnorm(qnorm(1 - p))/p","r*sigma*i","PGG*cycle","sum","sum","nInds*p"),
-                                              value=c(r,r2,sigma, mu, min.x, max.x, i, R, R*cycle ,nTrials, nInds, nIndsSelected),
+                                              method=c("sqrt(r2)","mean((G-PEV)/G)","sd(BLUP)","sum(x)/n","min(x)","max(x)","dnorm(qnorm(1 - p))/p","r*sigma*i","PGG/cycleTime","input","sum","sum","nInds*p"),
+                                              value=c(r,r2,sigma, mu, min.x, max.x, i, R, R/cycleTime, cycleTime, nTrials, nInds, nIndsSelected),
                                               stdError=NA
                                    )
       )
       currentModeling <- data.frame(module="pgg", analysisId=pggAnalysisId,trait=iTrait, environment=uE,
-                                    parameter=c("percentage(%)","verbose","classifier"), value=c(percentage, verbose, "across"))
+                                    parameter=c("percentage(%)","cycleTime(years)","verbose","classifier"), value=c(percentage, cycleTime, verbose, "across"))
       phenoDTfile$modeling <- rbind(phenoDTfile$modeling,currentModeling[,colnames(phenoDTfile$modeling)] )
     }
 

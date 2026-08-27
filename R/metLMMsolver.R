@@ -506,8 +506,12 @@ metLMMsolver <- function(
       envsToIncludeLocal <- envsToInclude
       if (!is.null(tpp_env_filter)) {
         valid_envs <- intersect(tpp_env_filter, rownames(envsToIncludeLocal))
-        if (length(valid_envs) < 2) {
-          warning(paste("TPP trait", iTrait, "skipped: fewer than 2 environments after filtering."))
+        # Allow single-environment traits when a genomic/pedigree kernel is used
+        # (the model can still estimate GEBVs without multiple environments)
+        has_relationship_kernel <- any(c("genoA", "genoAD", "genoD", "pedigree") %in% unlist(expCovariates))
+        min_envs_required <- if (has_relationship_kernel) 1L else 2L
+        if (length(valid_envs) < min_envs_required) {
+          warning(paste("TPP trait", iTrait, "skipped: fewer than", min_envs_required, "environments after filtering."))
           next
         }
         # Log info if some env_filter environments not found in data
@@ -615,6 +619,8 @@ metLMMsolver <- function(
             }
           }
           fixedTermTrait[[iTrait]] <- unique(fixedTermProv[which(unlist(lapply(fixedTermProv,length)) > 0)])
+          # If all fixed terms were pruned (e.g., environment with 1 level), default to intercept
+          if(length(fixedTermTrait[[iTrait]]) == 0) fixedTermTrait[[iTrait]] <- list("1")
           # random formula per trait
           randomTermProv <- randomTerm
           if(!is.null(randomTermProv)){
@@ -1001,7 +1007,16 @@ metLMMsolver <- function(
     }
    
     if(names(sort(table(effectTypeTrait), decreasing = TRUE))[1] == "BLUP"){ # if STA was BLUPs deregress
-      mydataSub$predictedValue <- mydataSub$predictedValue/mydataSub$reliability
+      ## Deregress only where reliability is usable. STA caps reliability at 0, so an
+      ## unguarded division yields Inf; those records keep their BLUP value and are
+      ## down-weighted anyway through w = 1/stdError^2.
+      relDeg <- mydataSub$reliability
+      okDeg  <- is.finite(relDeg) & relDeg > 0
+      if(any(!okDeg) && verbose){
+        message(paste("   Skipping deregression for", sum(!okDeg),
+                      "record(s) with non-positive or non-finite reliability"))
+      }
+      mydataSub$predictedValue[okDeg] <- mydataSub$predictedValue[okDeg]/relDeg[okDeg]
     }
     ## calculate weights
     mydataSub=mydataSub[with(mydataSub, order(environment)), ] # sort by environments
@@ -1009,6 +1024,7 @@ metLMMsolver <- function(
     ## get formula
     fix <- paste( unlist(lapply(fixedTermSub, function(x){paste(x, collapse = ":")})), collapse = " + ")
     fix <- paste("predictedValue ~", fix)
+    if(verbose){message(paste("   Fixed formula:", fix))}
     
     if(use_formula){
       
@@ -1072,6 +1088,9 @@ metLMMsolver <- function(
 
     pp <- list()
     ss <- NULL # initialize ss to NULL for each trait so we can detect model failure later
+    if(inherits(mix,"try-error") && verbose){
+      message(paste("   Model failed for trait", iTrait, ":", as.character(mix)))
+    }
     if(!inherits(mix,"try-error") ){ 
       
       ## save the modeling used
@@ -1318,7 +1337,10 @@ metLMMsolver <- function(
             }
             
             if (use_formula) {
-              idx <- start:(start + nEffects - 1L)
+              ## Use the same coefficient indices as the BLUPs (mix$ndxCoefficients).
+              ## Deriving them from a cumulative EDdf$Model offset is off by one for
+              ## random terms, which silently shifts the PEV diagonal.
+              idx <- pick
               nC <- nrow(mix$C)
               
               chunk <- 400L
@@ -1345,8 +1367,10 @@ metLMMsolver <- function(
               stdError <- sqrt(pmax(dvals, 0))
               
             } else {
-              stop <- start + nEffects - 1L
-              idx_block <- start:stop
+              ## Same coefficient indices the BLUPs were taken from. Using the
+              ## cumulative EDdf$Model offset here pulled in the last fixed-effect
+              ## row/column and dropped the last random one.
+              idx_block <- pick
               
               startPev <- seq(1L, length(blup), by = 500L)
               endPev <- c(startPev - 1L, length(blup))
@@ -1485,7 +1509,27 @@ metLMMsolver <- function(
             }
             
           } else if (!is_fw_term) {
-            prov[, "predictedValue"] <- prov[, "predictedValue"] + mu
+            ## Besides the intercept, add the average effect of the fixed factors that
+            ## are not part of this random term, so predictions sit at the designation
+            ## mean rather than at the reference level of those factors. This matches
+            ## ASReml's predict(classify=), which averages over the levels of factors
+            ## not being classified, with equal weights.
+            ##
+            ## The stored fixed-effect predictions already include mu, so the level
+            ## deviation is (value - mu). The reference level absorbed into the
+            ## intercept has a deviation of 0 and is not stored, so the sum is divided
+            ## by the total number of levels in the data, not the number stored.
+            feAvg <- 0
+            for (iFe in setdiff(fixedEffects, term_vars)) {
+              provFe <- pp[[iFe]]
+              if (is.null(provFe) || !NROW(provFe)) next
+              if (!(iFe %in% colnames(mydataSub))) next          # skip interactions
+              if (is.numeric(mydataSub[[iFe]])) next             # covariate, not a factor
+              nLev <- length(unique(as.character(mydataSub[[iFe]])))
+              if (!is.finite(nLev) || nLev < 1) next
+              feAvg <- feAvg + sum(provFe[, "predictedValue"] - mu, na.rm = TRUE)/nLev
+            }
+            prov[, "predictedValue"] <- prov[, "predictedValue"] + mu + feAvg
           }
           
           sdP <- sd(prov[, "predictedValue"], na.rm = TRUE)
@@ -1568,13 +1612,16 @@ metLMMsolver <- function(
             metricEnv <- paste(unique(mydataSub$environment), collapse = "_")
           }
           
+          # LSD95% approximation from average standard error of differences
+          lsdt <- qt(1 - 0.05 / 2, max(1, nrow(prov) - 1)) * mean(stdError, na.rm = TRUE) * sqrt(2)
+          
           phenoDTfile$metrics <- rbind(phenoDTfile$metrics,
                                        data.frame(module="mtaLmms",analysisId=mtaAnalysisId, trait= iTrait,
                                                   environment = metricEnv,
-                                                  parameter=c( paste(c("mean","sd", "r2","Var","Var_PEVcorr"),iGroup,sep="_") ),
-                                                  method=c("sum(x)/n","sd","(G-PEV)/G","REML","REML"),
-                                                  value=c(mean(prov[,"predictedValue"], na.rm=TRUE), sdP, median(reliability), var(prov[,"predictedValue"], na.rm=TRUE), var_PEV),
-                                                  stdError=c(NA,NA,sd(reliability, na.rm = TRUE)/sqrt(length(reliability)),NA,NA)
+                                                  parameter=c( paste(c("mean","sd", "r2","Var_PEVcorr","CV%","LSD95%"),iGroup,sep="_") ),
+                                                  method=c("sum(x)/n","sd","(G-PEV)/G","(var(BLUPs)+tr(PEV)/n)/mean(diag(K))","(sd/mean)*100","t*avsed"),
+                                                  value=c(mean(prov[,"predictedValue"], na.rm=TRUE), sdP, median(reliability), var_PEV, cv, lsdt),
+                                                  stdError=c(NA,NA,sd(reliability, na.rm = TRUE)/sqrt(length(reliability)),NA,NA,NA)
                                        )
           )
           

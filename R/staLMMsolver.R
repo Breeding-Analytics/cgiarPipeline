@@ -341,7 +341,7 @@ staLMM <- function(
                       silent = TRUE
                     )
                     if( inherits(mixFixed,"try-error") ){
-                      if(verbose){cat(paste("Fixed effects models failed. Returning deregressed BLUPs \n"))}
+                      if(verbose){cat(paste("Fixed effects models failed. Returning BLUPs (deregressed downstream in the MTA) \n"))}
                       currentModeling <- data.frame(module="sta", analysisId=staAnalysisId,trait=iTrait,environment=iField,
                                                     parameter=c("fixedFormula","randomFormula","spatialFormula","family","designationEffectType"),
                                                     value=c( fixedFormulaForRanModel,randomFormulaForRanModel,
@@ -386,9 +386,14 @@ staLMM <- function(
                       G <- A*vg # G matrix
                       R2 = (G - pev)/G
                       pp$reliability <- diag(R2)
-                      pp$predictedValue <- pp$predictedValue/pp$reliability
+                      ## Cap reliability BEFORE it is used anywhere downstream. Previously the
+                      ## deregression below ran on the uncapped value, so a negative reliability
+                      ## flipped the sign of the prediction and a near-zero one exploded it.
                       badRels <- which(pp$reliability > 1); if(length(badRels) > 0){pp$reliability[badRels] <- 0.9999}
                       badRels2 <- which(pp$reliability < 0); if(length(badRels2) > 0){pp$reliability[badRels2] <- 0}
+                      ## Deregression is NOT applied here. These are reported as
+                      ## designationEffectType = "BLUP" and the MTA deregresses them once,
+                      ## keyed off that label. Dividing here as well double-deregressed them.
                       predictionsList[[counter]] <- pp
                       phenoDTfile$metrics <- rbind(phenoDTfile$metrics,
                                                    data.frame(module="sta",analysisId=staAnalysisId, trait=iTrait, environment=iField,
