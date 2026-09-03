@@ -689,7 +689,7 @@ metASREML <- function(phenoDTfile = NULL,
     }
     
     #asreml::asreml.options(workspace = 300e7,pworkspace = 200e7,trace = T,ai.sing = T)
-    asreml::asreml.options(trace = T,ai.sing = T)
+    asreml::asreml.options(trace = F,ai.sing = T)
     
     fixed_formula <- tryCatch(as.formula(fixedTermSub), error = function(e) return(NULL))
     random_formula <- tryCatch(as.formula(randomTermSub), error = function(e) return(NULL))
@@ -713,6 +713,10 @@ metASREML <- function(phenoDTfile = NULL,
     if(exists("Gad", inherits=FALSE) && !is.null(Gad)) assign("Gad", Gad, envir = .GlobalEnv)
     if(exists("N", inherits=FALSE) && !is.null(N)) assign("N", N, envir = .GlobalEnv)
     if(exists("WI", inherits=FALSE) && !is.null(WI)) assign("WI", WI, envir = .GlobalEnv)
+    
+    
+    fit_ok<-TRUE
+    
     tryCatch({
       mix<<-asreml::asreml(
         fixed = fixed_formula,
@@ -725,14 +729,42 @@ metASREML <- function(phenoDTfile = NULL,
       )
     }, 
       error = function(e) {
+        fit_ok <<- FALSE
         message("❌ Error to adjust model:", e$message)
       }
       #warning = function(w) {
       #  message("Warning: ", w$message)
       #}
     )
-  
-  
+    
+    
+    if (!fit_ok) {
+      message("skipping trait: ", iTrait)
+      showNotification(
+        HTML(
+          paste0(
+            "<div style='
+          color:#b30000;
+          font-size:22px;
+          font-weight:bold;
+          line-height:1.5;
+        '>
+          ⚠️ Model fitting failed
+          <br>
+          <span style='font-size:18px; font-weight:normal;'>
+            Trying with another model.
+            <br>
+            Skipping trait: <b>", iTrait, "</b>
+          </span>
+        </div>"
+          )
+        ),
+        type = "error",
+        duration = 15
+      )
+      next
+    }
+    
     update_until_converged <- function(model, max_updates = 10, verbose = TRUE) {
       count <- 0
       while (!model$converge && count < max_updates) {
@@ -1470,28 +1502,58 @@ metASREML <- function(phenoDTfile = NULL,
       )
     )
     predictionsList[[iTrait]] <- predictionsTrait
+    rm(mix, envir=.GlobalEnv)
   }
   
   if (length(predictionsList) == 0) {
+    
+    showNotification(
+      HTML(
+        "<div style='
+        color:#b30000;
+        font-size:22px;
+        font-weight:bold;
+        line-height:1.5;
+      '>
+        ⚠️ No predictions available
+        <br>
+        <span style='font-size:18px; font-weight:normal;'>
+        Please check your H2 boundaries. You may be discarding all
+        environments, or try another model.
+        </span>
+      </div>"
+      ),
+      type = "error",
+      duration = NULL
+    )
+    
+    
     stop(
-      "There was no predictions to work with. Please look at your H2 boundaries. You may be discarding all envs.",
+      "There was no predictions to work with.",
       call. = FALSE
     )
+    
   }
+  
+  
 ##Adding corr traits
+if( length(predictionsList)>1 ){    
   traitL <- lapply(predictionsList, `[`, , c("designation", "effectType","predictedValue"))  
+  #unique(traitL[[1]]$effectType)
   traitL <- lapply(predictionsList, function(df) {
-    df[grepl("^designation", df$effectType),
+    df[grepl("designation", df$effectType) &
+         !grepl("[:_]", df$effectType),
        c("designation", "predictedValue"),
        drop = FALSE]
-  })  
+  }) 
+  if(all(sapply(traitL,nrow))!=0){
   resTL <- Reduce(function(x, y)
     merge(x, y, by = "designation", all = TRUE),
     Map(function(df, nm) {
       names(df)[2] <- nm
       df
     }, traitL, names(traitL)))  
-  rownames(resTL)<-resTL[,1]
+  #rownames(resTL)<-resTL[,1]
   resTL<-as.matrix(resTL[,-1])
   CorrMatT <- round(stats::cor(resTL, use="pairwise.complete.obs"),2)
   upper <- which(upper.tri(CorrMatT), arr.ind = TRUE)
@@ -1517,7 +1579,8 @@ metASREML <- function(phenoDTfile = NULL,
       )
     )
   }
-  
+  }
+} 
   predictionsBind <- do.call(rbind, predictionsList)
   predictionsBind$analysisId <- mtaAnalysisId
   ## add timePoint of origin, stage and designation code
