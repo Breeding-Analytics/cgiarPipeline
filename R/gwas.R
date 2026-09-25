@@ -31,7 +31,13 @@ gwas <- function (
       if(length(theresMatch) > 0){ # there's a modification file after matching the Id
         modificationsMarkers <- modificationsMarkers[theresMatch,]
         #Markers <- phenoDTfile$data$geno_imp[[ as.character(as.integer(analysisIdForGenoModifications)) ]]
-        Markers <- phenoDTfile$data$geno_imp[[grep(as.character(as.integer(analysisIdForGenoModifications)),names(phenoDTfile$data$geno_imp))]]  
+        # Was a substring grep on as.integer(id), which truncates where the QA/QC module
+        # rounds, so it missed whenever the fractional second rounded up (~half of stamps)
+        # and then errored on geno_imp[[integer(0)]].
+        qas <- cgiarBase::resolveGenoStamp(phenoDTfile$data$geno_imp, analysisIdForGenoModifications)
+        if(length(qas) == 0){stop("The genotype QA/QC Id ", paste(analysisIdForGenoModifications, collapse=", "), " was not found in geno_imp. Please verify you selected the correct Genotype QA/QC version.", call. = FALSE)}
+        if(length(qas) > 1){stop("The genotype QA/QC Id ", paste(analysisIdForGenoModifications, collapse=", "), " resolves to more than one entry in geno_imp. This function uses a single marker matrix, so please select one version.", call. = FALSE)}
+        Markers <- phenoDTfile$data$geno_imp[[qas]]
       }else{ # there's no match of the modification file
         if(length(which(adegenet::glNA(Markers) > 0)) > 0){stop("Markers have missing data and your Id didn't have a match in the modifications table to impute the genotype data.", call. = FALSE)}
       }

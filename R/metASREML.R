@@ -163,14 +163,22 @@ metASREML <- function(phenoDTfile = NULL,
   G=D=N=Gad=WI=Gm=Gf=Gd=NULL
   
   if (any(covkernel %in% covars)) {
+    # A genomic relationship kernel was requested, so a Genotype QA/QC version is
+    # required. Without this branch an unset stamp falls straight through the matching
+    # below into the raw-marker fallback, and the model is fitted on raw, unfiltered,
+    # unimputed markers with no indication to the user. "No data available" is the
+    # literal placeholder the MTA-ASReml UI puts in the dropdown when the status table
+    # holds no qaGeno row.
+    stampSelected <- as.character(analysisIdgeno)
+    if (length(stampSelected) == 0 || all(is.na(stampSelected)) ||
+        all(trimws(stampSelected) %in% c("", "No data available"))) {
+      stop("A genomic relationship kernel was requested but no Genotype QA/QC version was selected. Please run the 'Markers QA/QC' module and select the resulting version before fitting a model with a genomic kernel.", call. = FALSE)
+    }
     #New structure Geno info
     if (class(phenoDTfile$data$geno)[1] == "genlight") {
-      # Match analysisIdgeno to geno_imp names (handle numeric precision differences)
-      geno_imp_names <- names(phenoDTfile$data$geno_imp)
-      qas <- which(geno_imp_names == as.character(analysisIdgeno))
-      if (length(qas) == 0) {
-        # Try matching by rounding both sides to handle precision issues
-        qas <- which(round(as.numeric(geno_imp_names)) == round(as.numeric(analysisIdgeno)))
+      qas <- cgiarBase::resolveGenoStamp(phenoDTfile$data$geno_imp, analysisIdgeno)
+      if (length(qas) > 1) {
+        stop("The genotype QA/QC Id ", analysisIdgeno, " resolves to more than one entry in geno_imp. Please re-run the 'Markers QA/QC' module to produce an unambiguous version.", call. = FALSE)
       }
       if (length(qas) > 0) {
         Markers <- as.data.frame(phenoDTfile$data$geno_imp[qas])

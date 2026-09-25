@@ -177,7 +177,7 @@ metLMMsolver <- function(
           if(length(which(is.na(Markers))) > 0){stop("Markers have missing data and you have not provided a modifications table to impute the genotype data. Please go to the 'Markers QA/QC' module prior to run a model with genoA or genoAD covariate.", call. = FALSE)}
         }else{ # user provided a modifications Id
           if(class(phenoDTfile$data$geno)[1] == "genlight"){
-            theresMatch <- which(as.character(analysisIdGeno) %in% names(phenoDTfile$data$geno_imp))
+            theresMatch <- cgiarBase::resolveGenoStamp(phenoDTfile$data$geno_imp, analysisIdGeno)
           } else{
             modificationsMarkers <- phenoDTfile$modifications$geno
             theresMatch <- which(modificationsMarkers$analysisId %in% analysisIdGeno)
@@ -185,7 +185,12 @@ metLMMsolver <- function(
 
           if(length(theresMatch) > 0){ # there's a modification file after matching the Id
             if(class(phenoDTfile$data$geno)[1] == "genlight"){
-              Markers <- as.matrix(phenoDTfile$data$geno_imp[[as.character(analysisIdGeno)]])
+              if(length(theresMatch) > 1){
+                stop("The genotype QA/QC Id ", analysisIdGeno, " resolves to more than one entry in geno_imp. Please re-run the 'Markers QA/QC' module to produce an unambiguous version.", call. = FALSE)
+              }
+              # Index, not name: the stored key can differ from as.character(analysisIdGeno),
+              # so a name lookup would return NULL.
+              Markers <- as.matrix(phenoDTfile$data$geno_imp[[theresMatch]])
             } else{
               modificationsMarkers <- modificationsMarkers[theresMatch,]
               Markers <- cgiarBase::applyGenoModifications(M=Markers, modifications=modificationsMarkers)
