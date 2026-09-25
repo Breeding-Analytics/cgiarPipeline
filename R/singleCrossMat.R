@@ -145,7 +145,9 @@ singleCrossMat <- function( # single cross matrix function
   #  }
   #}
   if (class(object$data$geno)[1] == "genlight") {
-        qas <- which(names(object$data$geno_imp) == analysisIdForGenoModifications)
+        qas <- cgiarBase::resolveGenoStamp(object$data$geno_imp, analysisIdForGenoModifications)
+        if(length(qas) == 0){stop("The genotype QA/QC Id ", paste(analysisIdForGenoModifications, collapse=", "), " was not found in geno_imp. Please verify you selected the correct Genotype QA/QC version.", call. = FALSE)}
+        if(length(qas) > 1){stop("The genotype QA/QC Id ", paste(analysisIdForGenoModifications, collapse=", "), " resolves to more than one entry in geno_imp. This function uses a single marker matrix, so please select one version.", call. = FALSE)}
         Markers <- as.data.frame(object$data$geno_imp[qas])
   }	  
   # Markers <- Markers[,sample(1:min(c(ncol(Markers), nMarkersRRBLUP)))] # don't use all the markers if goes beyond nK

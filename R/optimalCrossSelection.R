@@ -67,10 +67,12 @@ ocs <- function(
 
   if(relDTfile %in% c("grm","both")){ # we need to calculate GRM
 
-    qas<-which( names(phenoDTfile$data$geno_imp)==analysisIdgeno )
+    qas <- cgiarBase::resolveGenoStamp(phenoDTfile$data$geno_imp, analysisIdgeno)
 
     if (length(qas) == 0)
       stop("Genotype version ", analysisIdgeno, " not found in geno_imp.", call. = FALSE)
+    if (length(qas) > 1)
+      stop("Genotype version ", analysisIdgeno, " resolves to more than one entry in geno_imp. Please re-run the 'Markers QA/QC' module to produce an unambiguous version.", call. = FALSE)
 
     gl <- phenoDTfile$data$geno_imp[[ qas[1] ]]
     ## MARKER KERNEL
@@ -85,9 +87,7 @@ ocs <- function(
       M <- apply(M[,which(missing < 0.9)],2,enhancer::imputev)
     }
 
-    if(ncol(M) > 5000){ # we remove that many markers if a big snp chip
-      A <- sommer::A.mat(M[,sample(1:ncol(M), 5000)])
-    }else{ A <- sommer::A.mat(M) };  M <- NULL
+    A <- sommer::A.mat(M);  M <- NULL
     if(relDTfile == "both"){ # only if ssgblup we merge
       A <- sommer::H.mat(N,A, tau=1,  omega=1, tolparinv=1e-6)
     }

@@ -18,9 +18,13 @@ individualVerification <- function(
   if (is.null(analysisIdForGenoModifications)) stop("No geno clean file specified.")
   
   # get markers
-  #Markers <- object$data$geno
+  # Initialised so the is.null() check below reports the intended message instead of
+  # failing with "object 'Markers' not found" on a non-genlight object.
+  Markers <- NULL
   if (class(object$data$geno)[1] == "genlight") {
-        qas <- which(names(object$data$geno_imp) == analysisIdForGenoModifications)
+        qas <- cgiarBase::resolveGenoStamp(object$data$geno_imp, analysisIdForGenoModifications)
+        if(length(qas) == 0){stop("The genotype QA/QC Id ", paste(analysisIdForGenoModifications, collapse=", "), " was not found in geno_imp. Please verify you selected the correct Genotype QA/QC version.", call. = FALSE)}
+        if(length(qas) > 1){stop("The genotype QA/QC Id ", paste(analysisIdForGenoModifications, collapse=", "), " resolves to more than one entry in geno_imp. This function uses a single marker matrix, so please select one version.", call. = FALSE)}
         Markers <- as.data.frame(object$data$geno_imp[[qas]])
         colnames(Markers) = adegenet::locNames(object$data$geno_imp[[qas]])
   }	 
