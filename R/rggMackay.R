@@ -77,7 +77,7 @@ rggMackay <- function(
   }else{ # BLUE
     deregress=FALSE
   }
-  # if(unique(modelingInput$module) == "sta"){
+  # if(unique(modelingInput$module) == "soa"){
   #   designationEffectType <- modelingInput[which(modelingInput$parameter == "randomFormula"),"value"]
   #   if(length(grep("designation", designationEffectType)) > 0){
   #     deregress=TRUE

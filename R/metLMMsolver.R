@@ -1122,7 +1122,7 @@ metLMMsolver <- function(
       kernelEnv[grepl("envIndex", kernelEnv)] <- "across"
       
       currentModeling <- data.frame(
-        module = "mtaLmms",
+        module = "moaLmms",
         analysisId = mtaAnalysisId,
         trait = iTrait,
         environment = c(rep("across", 3), kernelEnv),
@@ -1146,7 +1146,7 @@ metLMMsolver <- function(
       )
       
       ## save the environments used goodFields
-      currentModeling <- data.frame(module="mtaLmms", analysisId=mtaAnalysisId,trait=iTrait, environment=allEnvironments,
+      currentModeling <- data.frame(module="moaLmms", analysisId=mtaAnalysisId,trait=iTrait, environment=allEnvironments,
                                     parameter="includedInMta",
                                     value=ifelse(allEnvironments%in%unique(mydataSub$environment), TRUE, FALSE))
       phenoDTfile$modeling <- rbind(phenoDTfile$modeling,currentModeling[,colnames(phenoDTfile$modeling)] )
@@ -1654,7 +1654,7 @@ metLMMsolver <- function(
           lsdt <- qt(1 - 0.05 / 2, max(1, nrow(prov) - 1)) * mean(stdError, na.rm = TRUE) * sqrt(2)
           
           phenoDTfile$metrics <- rbind(phenoDTfile$metrics,
-                                       data.frame(module="mtaLmms",analysisId=mtaAnalysisId, trait= iTrait,
+                                       data.frame(module="moaLmms",analysisId=mtaAnalysisId, trait= iTrait,
                                                   environment = metricEnv,
                                                   parameter=c( paste(c("mean","sd", "r2","Var_PEVcorr","CV%","LSD95%"),iGroup,sep="_") ),
                                                   method=c("sum(x)/n","sd","(G-PEV)/G","(var(BLUPs)+tr(PEV)/n)/mean(diag(K))","(sd/mean)*100","t*avsed"),
@@ -1680,7 +1680,7 @@ metLMMsolver <- function(
       cv <- (sd(means$predictedValue,na.rm=TRUE)/mean(means$predictedValue,na.rm=TRUE))*100
       ## save metrics
       phenoDTfile$metrics <- rbind(phenoDTfile$metrics,
-                                   data.frame(module="mtaLmms",analysisId=mtaAnalysisId, trait=iTrait,
+                                   data.frame(module="moaLmms",analysisId=mtaAnalysisId, trait=iTrait,
                                               environment="across",
                                               parameter=c("mean","sd", "r2","Var_designation","Var_residual"),
                                               method=c("sum(x)/n","sd","(G-PEV)/G","REML","REML"),
@@ -1688,7 +1688,7 @@ metLMMsolver <- function(
                                               stdError=NA
                                    )
       )
-      currentModeling <- data.frame(module="mtaLmms", analysisId=mtaAnalysisId,trait=iTrait, environment="across",
+      currentModeling <- data.frame(module="moaLmms", analysisId=mtaAnalysisId,trait=iTrait, environment="across",
                                     parameter=c("fixedFormula","randomFormula","family","designationEffectType"),
                                     value=c("None","None","None","mean"))
       phenoDTfile$modeling <- rbind(phenoDTfile$modeling,currentModeling[,colnames(phenoDTfile$modeling)] )
@@ -1830,7 +1830,7 @@ metLMMsolver <- function(
       }
       
       data.frame(
-        module    = "mtaLmms",
+        module    = "moaLmms",
         analysisId = mtaAnalysisId,
         trait     = iTrait,
         environment = env_out,
@@ -1842,7 +1842,7 @@ metLMMsolver <- function(
     }))
     
     metric_base <- data.frame(
-      module    = "mtaLmms",
+      module    = "moaLmms",
       analysisId = mtaAnalysisId,
       trait     = iTrait,
       environment = "across",
@@ -1884,7 +1884,7 @@ metLMMsolver <- function(
                              pipeline=NA_character_, stringsAsFactors=FALSE)
   }
   predictionsBind <- merge(predictionsBind,baseOrigin, by="designation", all.x=TRUE)
-  predictionsBind$module <- "mtaLmms"; rownames(predictionsBind) <- NULL
+  predictionsBind$module <- "moaLmms"; rownames(predictionsBind) <- NULL
 
   #print(head(predictionsBind))
   #########################################
@@ -1928,14 +1928,14 @@ metLMMsolver <- function(
                                    predictionsBind[,colnames(phenoDTfile$predictions)])
   
 
-  newStatus <- data.frame(module="mtaLmms", analysisId=mtaAnalysisId, analysisIdName=NA)
+  newStatus <- data.frame(module="moaLmms", analysisId=mtaAnalysisId, analysisIdName=NA)
   phenoDTfile$status <- rbind( phenoDTfile$status, newStatus[,colnames(phenoDTfile$status)] )
   ## add which data was used as input
-  modeling <- data.frame(module="mtaLmms",  analysisId=mtaAnalysisId, trait=c("inputObject"), environment="general",
+  modeling <- data.frame(module="moaLmms",  analysisId=mtaAnalysisId, trait=c("inputObject"), environment="general",
                          parameter= c("analysisId"), value= c(analysisId ))
   if(!is.null(nPC)){
     modeling <- rbind(modeling,
-                      data.frame(module="mtaLmms",  analysisId=mtaAnalysisId, trait=names(nPC), environment="general",
+                      data.frame(module="moaLmms",  analysisId=mtaAnalysisId, trait=names(nPC), environment="general",
                                  parameter= c("nPC"), value= nPC )
     )
   }
