@@ -1249,7 +1249,7 @@ metASREML <- function(phenoDTfile = NULL,
     if (length(kernels) == 0) { kernels = "none" }
     ## save the modeling used
     currentModeling <- data.frame(
-      module = "MtaAsr",
+      module = "moaAsr",
       analysisId = mtaAnalysisId,
       trait = iTrait,
       environment = c(rep("across", 4), "designation"),
@@ -1271,7 +1271,7 @@ metASREML <- function(phenoDTfile = NULL,
     phenoDTfile$modeling <- rbind(phenoDTfile$modeling, currentModeling[, colnames(phenoDTfile$modeling)])
     ## save the environments used goodFields
     currentModeling <- data.frame(
-      module = "MtaAsr",
+      module = "moaAsr",
       analysisId = mtaAnalysisId,
       trait = iTrait,
       environment = allEnvironments,
