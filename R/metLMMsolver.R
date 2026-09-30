@@ -113,7 +113,7 @@ metLMMsolver <- function(
   ##########################################
   ## CONTROLS FOR MISSPECIFICATION (6 lines)
   if(is.null(phenoDTfile)){stop("Please provide the phenotype file", call. = FALSE)}
-  if(is.null(analysisId)){stop("Please provide the STA analysisId to be analyzed", call. = FALSE)}
+  if(is.null(analysisId)){stop("Please provide the SOA analysisId to be analyzed", call. = FALSE)}
   if(is.null(trait)){stop("Please provide traits to be analyzed", call. = FALSE)}else{
     baseData <- phenoDTfile$predictions[which(phenoDTfile$predictions$analysisId %in% analysisId ),]
     # For TPP traits, resolve pheno_trait names for validation
@@ -459,7 +459,7 @@ metLMMsolver <- function(
   mydata <- phenoDTfile$predictions #
   mydata <- mydata[which(mydata$analysisId %in% analysisId),]
   
-  if (nrow(mydata) < 2) stop("Not enough data is available to perform a multi trial analysis. Please perform an STA before trying to do an MET.", call. = FALSE)
+  if (nrow(mydata) < 2) stop("Not enough data is available to perform a multi occurrence analysis. Please perform an SOA before trying to do an MET.", call. = FALSE)
   metaPheno <- phenoDTfile$metadata$pheno[which(phenoDTfile$metadata$pheno$parameter %in% c("pipeline","stage","environment","year","season","timepoint","country","location","trial","study","management")),]
   otherMetaCols <- unique(phenoDTfile$data$pheno[,metaPheno$value,drop=FALSE])
   colnames(otherMetaCols) <- cgiarBase::replaceValues(Source = colnames(otherMetaCols), Search = metaPheno$value, Replace = metaPheno$parameter )
@@ -546,7 +546,7 @@ metLMMsolver <- function(
       envCount[[iTrait]] <- unique(prov$environment)
       
       # Finlay-Wilkinson environmental index
-      # Computed per trait from STA adjusted values 
+      # Computed per trait from SOA adjusted values 
       needs_envIndex <- "envIndex" %in% unique(c(
         unlist(fixedTerm),
         unlist(randomTerm)
@@ -1014,7 +1014,7 @@ metLMMsolver <- function(
     randomTermSub <- randomTermTrait[[iTrait]] # extract random formula
     ## deregress if needed
     VarFull <- var(mydataSub[,"predictedValue"], na.rm = TRUE) # total variance
-    # Use actual_trait (pheno_trait) for modeling lookup from STA results
+    # Use actual_trait (pheno_trait) for modeling lookup from SOA results
     modelingLookupTrait <- if (!is.null(tppActualTraitMap[[iTrait]])) tppActualTraitMap[[iTrait]] else iTrait
     if(length(analysisId)>1){
       effectTypeTrait <- phenoDTfile$modeling[which(phenoDTfile$modeling$analysisId %in% analysisId & phenoDTfile$modeling$trait == modelingLookupTrait & phenoDTfile$modeling$parameter == "designationEffectType"),"value"]
@@ -1022,8 +1022,8 @@ metLMMsolver <- function(
       effectTypeTrait <- phenoDTfile$modeling[which(phenoDTfile$modeling$analysisId == analysisId & phenoDTfile$modeling$trait == modelingLookupTrait & phenoDTfile$modeling$parameter == "designationEffectType"),"value"]
     }
    
-    if(names(sort(table(effectTypeTrait), decreasing = TRUE))[1] == "BLUP"){ # if STA was BLUPs deregress
-      ## Deregress only where reliability is usable. STA caps reliability at 0, so an
+    if(names(sort(table(effectTypeTrait), decreasing = TRUE))[1] == "BLUP"){ # if SOA was BLUPs deregress
+      ## Deregress only where reliability is usable. SOA caps reliability at 0, so an
       ## unguarded division yields Inf; those records keep their BLUP value and are
       ## down-weighted anyway through w = 1/stdError^2.
       relDeg <- mydataSub$reliability
@@ -1579,7 +1579,7 @@ metLMMsolver <- function(
           ss[iGroup, "predictedStd"] <- sdP
           ss[iGroup, "predictedCV"] <- cv
           
-          # recover original entryType from the STA predictions
+          # recover original entryType from the SOA predictions
           entry_lookup <- aggregate(
             entryType ~ designation,
             data = mydataSub,

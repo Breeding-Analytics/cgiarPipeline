@@ -104,7 +104,7 @@ staLMM <- function(
     if(iRequired %in% colnames(mydata)){}else{mydata[,iRequired] <- NA}
   }
   
-  if (nrow(mydata) < 2) stop("Not enough phenotypic data is available to perform a single trial analysis. Please add the phenotypic data to your data object.", call. = FALSE)
+  if (nrow(mydata) < 2) stop("Not enough phenotypic data is available to perform a single occurrence analysis. Please add the phenotypic data to your data object.", call. = FALSE)
   if( length(setdiff(setdiff(fixedTerm,"1"),c( colnames(mydata), colnames(myped) ) )) > 0 ){stop(paste("column(s):", paste(setdiff(setdiff(fixedTerm,"1"),colnames(mydata)), collapse = ","),"couldn't be found."), call. = FALSE)}
   mydata$rowindex <- 1:nrow(mydata)
 
@@ -151,7 +151,7 @@ staLMM <- function(
   }
   
   #####################################
-  # single trial analysis
+  # single occurrence analysis
   fixedFormulaForFixedModel <- randomFormulaForFixedModel <- NULL
   # fields <- as.character(na.omit(unique(mydata$environment)))
 
@@ -356,7 +356,7 @@ staLMM <- function(
                       silent = TRUE
                     )
                     if( inherits(mixFixed,"try-error") ){
-                      if(verbose){cat(paste("Fixed effects models failed. Returning BLUPs (deregressed downstream in the MTA) \n"))}
+                      if(verbose){cat(paste("Fixed effects models failed. Returning BLUPs (deregressed downstream in the MOA) \n"))}
                       currentModeling <- data.frame(module="soa", analysisId=staAnalysisId,trait=iTrait,environment=iField,
                                                     parameter=c("fixedFormula","randomFormula","spatialFormula","family","designationEffectType"),
                                                     value=c( fixedFormulaForRanModel,randomFormulaForRanModel,
@@ -407,7 +407,7 @@ staLMM <- function(
                       badRels <- which(pp$reliability > 1); if(length(badRels) > 0){pp$reliability[badRels] <- 0.9999}
                       badRels2 <- which(pp$reliability < 0); if(length(badRels2) > 0){pp$reliability[badRels2] <- 0}
                       ## Deregression is NOT applied here. These are reported as
-                      ## designationEffectType = "BLUP" and the MTA deregresses them once,
+                      ## designationEffectType = "BLUP" and the MOA deregresses them once,
                       ## keyed off that label. Dividing here as well double-deregressed them.
                       predictionsList[[counter]] <- pp
                       phenoDTfile$metrics <- rbind(phenoDTfile$metrics,

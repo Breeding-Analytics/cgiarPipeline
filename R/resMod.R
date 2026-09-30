@@ -55,7 +55,7 @@ resMod <- function(
   for(iRequired in required_mapping){
     if(iRequired %in% colnames(mydata)){}else{mydata[,iRequired] <- NA}
   }
-  if (nrow(mydata) < 2) stop("Not enough phenotypic data is available to perform a single trial analysis. Please add the phenotypic data to your data object.", call. = FALSE)
+  if (nrow(mydata) < 2) stop("Not enough phenotypic data is available to perform a single occurrence analysis. Please add the phenotypic data to your data object.", call. = FALSE)
   if( length(setdiff(setdiff(fixedTerm,"1"),c( colnames(mydata), colnames(myped) ) )) > 0 ){stop(paste("column(s):", paste(setdiff(setdiff(fixedTerm,"1"),colnames(mydata)), collapse = ","),"couldn't be found."), call. = FALSE)}
   mydata$rowindex <- 1:nrow(mydata)
 
@@ -115,7 +115,7 @@ resMod <- function(
     }
   }
   #####################################
-  # single trial analysis
+  # single occurrence analysis
   fixedFormulaForFixedModel <- randomFormulaForFixedModel <- NULL
   # fields <- as.character(na.omit(unique(mydata$environment)))
 

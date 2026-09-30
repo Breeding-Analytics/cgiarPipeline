@@ -184,7 +184,7 @@ rggPiepho <- function(
     mydataSub$designation <- as.factor(mydataSub$designation)
     
     #Get intercept and fixed effect part from BLUPs
-    ## pull the actual formulas MTA stored for this trait
+    ## pull the actual formulas MOA stored for this trait
     fixed_formula_chr  <- modelingInput$value[modelingInput$trait == iTrait &
                                                 modelingInput$parameter == "fixedFormula"]
     random_formula_chr <- modelingInput$value[modelingInput$trait == iTrait &
@@ -213,7 +213,7 @@ rggPiepho <- function(
     co_factors <- unique(unlist(lapply(rand_ints, function(v) setdiff(v, "designation"))))
     if (!length(co_factors)) co_factors <- character()
     
-    # overlap with fixed MAIN effects (mirrors MTA's feToAdd intersection by names)
+    # overlap with fixed MAIN effects (mirrors MOA's feToAdd intersection by names)
     overlap_fixed <- intersect(co_factors, fixed_main)
     
     # intercept μ for this trait
@@ -225,7 +225,7 @@ rggPiepho <- function(
       for (v in overlap_fixed) {
         blues_v <- get_fixed_blues_table(iTrait, v)
         if (!nrow(blues_v)) next
-        # MTA writes fixed BLUEs including μ; subtract μ to get deviations
+        # MOA writes fixed BLUEs including μ; subtract μ to get deviations
         blues_v$dev <- blues_v$predictedValue - mu
         levs <- choose_levels_for_factor(mydataSub, v, blues_v)
         if (!length(levs)) next
