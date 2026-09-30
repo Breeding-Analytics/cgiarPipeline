@@ -1195,7 +1195,7 @@ metASREML <- function(phenoDTfile = NULL,
       phenoDTfile$metrics <- rbind(
         phenoDTfile$metrics,
         data.frame(
-          module = "mtaAsr",
+          module = "moaAsr",
           analysisId = mtaAnalysisId,
           trait = iTrait,
           environment = paste(unique(envTypeSub), collapse = "_"),
@@ -1249,7 +1249,7 @@ metASREML <- function(phenoDTfile = NULL,
     if (length(kernels) == 0) { kernels = "none" }
     ## save the modeling used
     currentModeling <- data.frame(
-      module = "MtaAsr",
+      module = "moaAsr",
       analysisId = mtaAnalysisId,
       trait = iTrait,
       environment = c(rep("across", 4), "designation"),
@@ -1271,7 +1271,7 @@ metASREML <- function(phenoDTfile = NULL,
     phenoDTfile$modeling <- rbind(phenoDTfile$modeling, currentModeling[, colnames(phenoDTfile$modeling)])
     ## save the environments used goodFields
     currentModeling <- data.frame(
-      module = "MtaAsr",
+      module = "moaAsr",
       analysisId = mtaAnalysisId,
       trait = iTrait,
       environment = allEnvironments,
@@ -1289,7 +1289,7 @@ metASREML <- function(phenoDTfile = NULL,
     phenoDTfile$metrics <- rbind(
       phenoDTfile$metrics,
       data.frame(
-        module = "mtaAsr",
+        module = "moaAsr",
         analysisId = mtaAnalysisId,
         trait = iTrait,
         environment = "across",
@@ -1334,7 +1334,7 @@ metASREML <- function(phenoDTfile = NULL,
       phenoDTfile$metrics <- rbind(
         phenoDTfile$metrics,
         data.frame(
-          module = "mtaAsr",
+          module = "moaAsr",
           analysisId = mtaAnalysisId,
           trait = iTrait,
           environment = "across",
@@ -1366,7 +1366,7 @@ metASREML <- function(phenoDTfile = NULL,
       phenoDTfile$metrics <- rbind(
         phenoDTfile$metrics,
         data.frame(
-          module = "mtaAsr",
+          module = "moaAsr",
           analysisId = mtaAnalysisId,
           trait = iTrait,
           environment = "across",
@@ -1391,7 +1391,7 @@ metASREML <- function(phenoDTfile = NULL,
         )
       )
       currentModeling <- data.frame(
-        module = "mtaAsr",
+        module = "moaAsr",
         analysisId = mtaAnalysisId,
         trait = iTrait,
         environment = "across",
@@ -1502,7 +1502,7 @@ metASREML <- function(phenoDTfile = NULL,
     phenoDTfile$metrics <- rbind(
       phenoDTfile$metrics,
       data.frame(
-        module = "mtaAsr",
+        module = "moaAsr",
         analysisId = mtaAnalysisId,
         trait = iTrait,
         environment = "across",
@@ -1581,7 +1581,7 @@ if( length(predictionsList)>1 ){
     phenoDTfile$metrics <- rbind(
       phenoDTfile$metrics,
       data.frame(
-        module = "mtaAsr",
+        module = "moaAsr",
         analysisId = mtaAnalysisId,
         trait = "CorrTrait",
         environment = "across",
@@ -1617,7 +1617,7 @@ if( length(predictionsList)>1 ){
                            baseOrigin,
                            by = "designation",
                            all.x = TRUE)
-  predictionsBind$module <- "mtaAsr"
+  predictionsBind$module <- "moaAsr"
   rownames(predictionsBind) <- NULL
   
   if (!is.null(phenoDTfile$predictions)) {
@@ -1672,13 +1672,13 @@ if( length(predictionsList)>1 ){
   }
     
   phenoDTfile$predictions <- rbind(phenoDTfile$predictions, predictionsBind[, colnames(phenoDTfile$predictions)])
-  newStatus <- data.frame(module = "mtaAsr",
+  newStatus <- data.frame(module = "moaAsr",
                           analysisId = mtaAnalysisId,
                           analysisIdName = NA)
   phenoDTfile$status <- rbind(phenoDTfile$status, newStatus[, colnames(phenoDTfile$status)])
   ## add which data was used as input
   modeling <- data.frame(
-    module = "mtaAsr",
+    module = "moaAsr",
     analysisId = mtaAnalysisId,
     trait = c("inputObject"),
     environment = "general",
