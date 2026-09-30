@@ -89,11 +89,21 @@ staLMM <- function(
                            sireCol = paramsPed[paramsPed$parameter=="father","value"]
   )
   colnames(myped) <- c("designation","mother","father")
+  
   ### make sure all expected columns are present
-  required_mapping <- c("stage", "pipeline", "country", "year", "season", "location", "trial", "environment", "rep", "iBlock", "row", "col", "designation", "gid", "entryType", "trait")
+  required_mapping <- c("stage", "pipeline", "country", "year", "season", "location", "trial", "environment", "rep", "iBlock", "row", "col", "rowDes", "colDes", "designation", "gid", "entryType", "trait")
+  # Spatial/design coordinates must come from the column mapping, not from raw column names.
+  # If row/col/rowDes/colDes were NOT explicitly selected (i.e. not in metadata$pheno$parameter),
+  # ignore any raw column that happens to share that name so it is not used in the model.
+  designCoordFields <- c("row", "col", "rowDes", "colDes")
+  unmappedDesignCoord <- setdiff(designCoordFields, paramsPheno$parameter)
+  for(iCoord in unmappedDesignCoord){
+    if(iCoord %in% colnames(mydata)){ mydata[, iCoord] <- NA }
+  }
   for(iRequired in required_mapping){
     if(iRequired %in% colnames(mydata)){}else{mydata[,iRequired] <- NA}
   }
+  
   if (nrow(mydata) < 2) stop("Not enough phenotypic data is available to perform a single trial analysis. Please add the phenotypic data to your data object.", call. = FALSE)
   if( length(setdiff(setdiff(fixedTerm,"1"),c( colnames(mydata), colnames(myped) ) )) > 0 ){stop(paste("column(s):", paste(setdiff(setdiff(fixedTerm,"1"),colnames(mydata)), collapse = ","),"couldn't be found."), call. = FALSE)}
   mydata$rowindex <- 1:nrow(mydata)
@@ -132,7 +142,7 @@ staLMM <- function(
   
   # check if experimental design factor filtering is done
   if(nrow(cleaning[which(cleaning$module == "qaDesign"),] > 0)){
-    cleaningSubDes <- cleaning[which(cleaning$trait %in% c("row","col","rep","iBlock")),]
+    cleaningSubDes <- cleaning[which(cleaning$trait %in% c("rowDes","colDes","rep","iBlock")),]
     
     for (iDes in unique(cleaningSubDes$trait)){
       outDes <- which(mydata$rowindex %in% cleaningSubDes[which(cleaningSubDes$trait == iDes), "row"])
@@ -170,12 +180,11 @@ staLMM <- function(
       mydataSub <- droplevels(mydata[which(as.character(mydata$environment) %in% iField),])
       mydataSub$trait <- as.numeric(mydataSub[,iTrait])
       # make factors
-      for(iEd in c("environment","trial","row","col","rep","iBlock")){
+      for(iEd in c("environment","trial","row","col","rowDes","colDes","rep","iBlock")){
+        if(iEd %in% c("rowDes","colDes")){mydataSub[,iEd] <- as.numeric(mydataSub[,iEd])}
         if(iEd %in% c("row","col")){mydataSub[,iEd] <- as.numeric(mydataSub[,iEd])}
-        # if(iEd %in% colnames(mydataSub)){
-        mydataSub[,paste0(iEd,"F")] <-  as.factor(mydataSub[,iEd])
-        # }else{  mydataSub[,paste0(iEd,"F")] <- NA; mydataSub[,iEd] <- NA   }
       }
+        
       for(iName in c("designation","mother","father")){
         mydataSub[,iName] <- as.factor(mydataSub[,iName])
       }
@@ -230,7 +239,7 @@ staLMM <- function(
             randomTerms <- c("trialF", "repF", "iBlockF")
             
             if(rowColRole == "design"){
-              randomTerms <- c("rowF", "colF", randomTerms)
+              randomTerms <- c("rowDesF", "colDesF", randomTerms)
             }
             
             min_levels <- c(trialF = 2,repF = 2, iBlockF = 4)
@@ -242,16 +251,22 @@ staLMM <- function(
             )
             
             screened$summary
+                        
+            if (all(c("rowF", "colF") %in% colnames(mydataSub))) {
+              resid_screen <- cgiarBase::screen_sta_residual_terms(
+                residual_terms = c("rowF", "colF"),
+                dat = mydataSub,
+                min_levels = c(rowF = 5, colF = 5)
+              )
+            }else{
+              resid_screen <- cgiarBase::screen_sta_residual_terms(
+                residual_terms = NULL,
+                dat = mydataSub,
+                min_levels = c(rowF = 5, colF = 5)
+              )
+            }
             
-            resid_screen <- cgiarBase::screen_sta_residual_terms(
-              residual_terms = c("rowF", "colF"),
-              dat = mydataSub,
-              min_levels = c(rowF = 5, colF = 5)
-            )
-            
-            
-            resid_screen$summary
-            
+            resid_screen$summary            
 
             newRandom <- if(length(screened$kept) > 0) screened$kept else NULL
             
