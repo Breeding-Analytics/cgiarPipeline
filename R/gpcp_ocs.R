@@ -28,7 +28,7 @@ gpcp <- function(
   # loading the dataset
   if(is.null(which(data()$predictions$effectType=="designationA")) && is.null(which(data()$predictions$effectType=="designationD")) && is.null(which(data()$predictions$effectType=="inbreeding"))){
   #if(is.null(phenoDTfile$GPCP)){
-    stop("GPCP is only possible if the MTA analysis is done using model 'Main effects (A+D)' ")
+    stop("GPCP is only possible if the MOA analysis is done using model 'Main effects (A+D)' ")
 
   }else{
     if(verbose){
@@ -147,7 +147,7 @@ gpcp <- function(
   common <- intersect(rownames(M), GPCP_list$BlupA$designation)
 
   if(length(common) == 0){
-    stop("There was no intersection between the IDs in the relationship matrix and the IDs in the blups provided by MTA analysis. Please check your input files.",call. = FALSE)
+    stop("There was no intersection between the IDs in the relationship matrix and the IDs in the blups provided by MOA analysis. Please check your input files.",call. = FALSE)
   }
 
   M <- M[common,]

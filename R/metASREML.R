@@ -52,7 +52,7 @@ metASREML <- function(phenoDTfile = NULL,
     stop("Please provide the phenotype file", call. = FALSE)
   }
   if (is.null(analysisId)) {
-    stop("Please provide the STA analysisId to be analyzed", call. = FALSE)
+    stop("Please provide the SOA analysisId to be analyzed", call. = FALSE)
   }
   if (is.null(trait)) {
     stop("Please provide traits to be analyzed", call. = FALSE)
@@ -167,7 +167,7 @@ metASREML <- function(phenoDTfile = NULL,
     # required. Without this branch an unset stamp falls straight through the matching
     # below into the raw-marker fallback, and the model is fitted on raw, unfiltered,
     # unimputed markers with no indication to the user. "No data available" is the
-    # literal placeholder the MTA-ASReml UI puts in the dropdown when the status table
+    # literal placeholder the MOA-ASReml UI puts in the dropdown when the status table
     # holds no qaGeno row.
     stampSelected <- as.character(analysisIdgeno)
     if (length(stampSelected) == 0 || all(is.na(stampSelected)) ||
@@ -381,7 +381,7 @@ metASREML <- function(phenoDTfile = NULL,
   mydata <- mydata[which(mydata$analysisId %in% analysisId), ]
   if (nrow(mydata) < 2){
     stop(
-      "Not enough data is available to perform a multi trial analysis. Please perform an STA before trying to do an MET.",
+      "Not enough data is available to perform a multi occurrence analysis. Please perform an SOA before trying to do an MET.",
       call. = FALSE
     )}
   metaPheno <- phenoDTfile$metadata$pheno[which(
@@ -635,7 +635,7 @@ metASREML <- function(phenoDTfile = NULL,
     # # iTrait = trait[1]  iTrait="value"
     message(paste("Analyzing trait", iTrait))
     
-    # TPP: resolve the actual pheno_trait for STA modeling lookups
+    # TPP: resolve the actual pheno_trait for SOA modeling lookups
     actual_trait_fit <- if (!is.null(actualTraitMap[[iTrait]])) actualTraitMap[[iTrait]] else iTrait
     
     mydataSub <- myDataTraits[[iTrait]] # extract dataset
@@ -650,8 +650,8 @@ metASREML <- function(phenoDTfile = NULL,
       effectTypeTrait <- phenoDTfile$modeling[which(phenoDTfile$modeling$analysisId == analysisId & phenoDTfile$modeling$trait == actual_trait_fit & phenoDTfile$modeling$parameter == "designationEffectType"),"value"]
     }
     if (names(sort(table(effectTypeTrait), decreasing = TRUE))[1] == "BLUP") {
-      # if STA was BLUPs deregress
-      ## Deregress only where reliability is usable. STA caps reliability at 0, so an
+      # if SOA was BLUPs deregress
+      ## Deregress only where reliability is usable. SOA caps reliability at 0, so an
       ## unguarded division yields Inf; those records keep their BLUP value and are
       ## down-weighted anyway through the 1/stdError^2 weights.
       relDeg <- mydataSub$reliability

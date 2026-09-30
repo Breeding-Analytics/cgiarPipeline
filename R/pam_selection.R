@@ -37,7 +37,7 @@ assessSelectionQuality <- function(args, dt_object) {
     check_entry_type_value <- NULL
   }
 
-  # ---- Filter MTA predictions (same pattern as checkTraitQuality) ----
+  # ---- Filter MOA predictions (same pattern as checkTraitQuality) ----
   preds <- dt_object$predictions
   mta_preds <- preds[preds$analysisId == args$mtaStamp & preds$effectType == "designation", ]
   mta_preds <- mta_preds[mta_preds$trait %in% args$traitsToEvaluate, ]
@@ -633,14 +633,14 @@ runInitialProdAdv <- function(analysisId = as.numeric(Sys.time()),
     check_entry_type_value <- NULL
   }
 
-  #Filter MTA predictions
+  #Filter MOA predictions
   preds <- dt_object$predictions
   mta_preds <- preds[preds$analysisId == args$mtaStamp & preds$effectType == "designation",]
   mta_preds <- mta_preds[mta_preds$trait %in% args$traitsToEvaluate,]
   mta_preds <- mta_preds[order(mta_preds$designation), ]
 
   # Deduplicate: keep one row per designation × trait (average if duplicated)
-  # This handles cases where MTA stores multiple predictions per designation
+  # This handles cases where MOA stores multiple predictions per designation
   dup_key <- paste(mta_preds$designation, mta_preds$trait, sep = "|||")
   if (any(duplicated(dup_key))) {
     agg_cols <- c("predictedValue")
@@ -1465,7 +1465,7 @@ build_prodadv_decision_table_data <- function(dt,
   ]
   
   if (nrow(preds) == 0) {
-    stop("No predictions found for the selected MTA stamp and traits.")
+    stop("No predictions found for the selected MOA stamp and traits.")
   }
   
   pred_wide <- reshape(
@@ -1875,11 +1875,11 @@ build_prodadv_review_plot_data <- function(dt,
   sta_stamp_used <- sta_stamp_used[!is.na(sta_stamp_used) & nzchar(sta_stamp_used)]
   
   if (length(mta_stamp_used) == 0) {
-    stop("No MTA stamp recorded for this initial selection.")
+    stop("No MOA stamp recorded for this initial selection.")
   }
   
   if (length(sta_stamp_used) == 0) {
-    stop("No STA stamp recorded for this initial selection.")
+    stop("No SOA stamp recorded for this initial selection.")
   }
   
   preds <- dt$predictions
@@ -1912,11 +1912,11 @@ build_prodadv_review_plot_data <- function(dt,
   ]
   
   if (nrow(mta_preds) == 0) {
-    stop("No MTA predictions found for the selected initial selection.")
+    stop("No MOA predictions found for the selected initial selection.")
   }
   
   if (nrow(sta_preds) == 0) {
-    stop("No STA predictions found for the selected initial selection.")
+    stop("No SOA predictions found for the selected initial selection.")
   }
   
   mta_cols <- c("designation", "trait", "predictedValue")
@@ -3487,7 +3487,7 @@ cluster_genomic_only <- function(grm, selected_designations, index_values) {
 #' Save meeting product advancement consensus decisions
 #'
 #' Persists the meeting consensus decisions with full provenance linking
-#' back to each stakeholder's Final_Selection_Stamp and the shared MTA analysis.
+#' back to each stakeholder's Final_Selection_Stamp and the shared MOA analysis.
 #'
 #' @param analysisId Numeric timestamp ID for this meeting analysis.
 #' @param analysisIdName Character string name for the meeting (optional).
@@ -3569,7 +3569,7 @@ saveMeetingProdAdvSelection <- function(
     )
   }))
 
-  # Row: inputObject for MTA stamp
+  # Row: inputObject for MOA stamp
   input_mta_row <- make_modeling_row(
     "Meeting_prodAdv", analysisId, aid_name, NA_character_, "across",
     "inputObject", mtaStamp

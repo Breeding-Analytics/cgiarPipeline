@@ -60,7 +60,7 @@ pgg <- function(
   p <- percentage/100
   i <- dnorm(qnorm(1 - p))/p
   # The predicted genetic gain is computed on the across-environment predictions
-  # coming from the MTA. Depending on the MTA engine, the across-environment level
+  # coming from the MOA. Depending on the MOA engine, the across-environment level
   # is labelled either "(Intercept)" (LMMsolver) or "across" (ASReml/RRBLUP), so we
   # select it explicitly by name rather than relying on the ordering of unique().
   acrossLabels <- c("(Intercept)", "across")
@@ -68,7 +68,7 @@ pgg <- function(
   if(length(acrossEnv) == 0){
     stop(paste0("No across-environment predictions found for this analysisId (expected the '",
                 by, "' column to contain one of: ", paste(acrossLabels, collapse=", "),
-                "). Predicted genetic gain requires across-environment MTA results."), call. = FALSE)
+                "). Predicted genetic gain requires across-environment MOA results."), call. = FALSE)
   }
   acrossEnv <- acrossEnv[1] # in the unlikely event both labels are present, keep the first match
   # counter=1
