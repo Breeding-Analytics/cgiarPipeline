@@ -2,9 +2,24 @@
 # BIOFLOW - PHENOTYPE QA/QC
 # Missingness analysis functions
 # ============================================================
-
-
 # ------------------------------------------------------------
+# 10. Create complete missingness object
+# ------------------------------------------------------------
+
+run_missingness_analysis <- function(
+    data,
+    genotype_col,
+    environment_col,
+    trait_cols,
+    design_vars,
+    replicate_col = NULL,
+    block_col = NULL,
+    row_col = NULL,
+    column_col = NULL,
+    warning_threshold = 10,
+    critical_threshold = 30) {
+
+  # ------------------------------------------------------------
 # 1. Design variable missingness
 # ------------------------------------------------------------
 
@@ -402,24 +417,6 @@ trait_missingness <- function(data,
   result
 }
 
-
-# ------------------------------------------------------------
-# 10. Create complete missingness object
-# ------------------------------------------------------------
-
-run_missingness_analysis <- function(
-    data,
-    genotype_col,
-    environment_col,
-    trait_cols,
-    design_vars,
-    replicate_col = NULL,
-    block_col = NULL,
-    row_col = NULL,
-    column_col = NULL,
-    warning_threshold = 10,
-    critical_threshold = 30) {
-  
   # ------------------------------------------
   # Design
   # ------------------------------------------
