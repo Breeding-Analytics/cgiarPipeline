@@ -10,10 +10,17 @@ resMod <- function(
   if(is.null(phenoDTfile)){stop("Please provide the name of the file to be used for analysis", call. = FALSE)}
   if(is.null(trait)){stop("Please provide traits to be analyzed", call. = FALSE)}
   fixedTerm <- unique(c("1", "rep","iBlock", genoUnit))
-  
+
+if(is.null(analysisId)){ # user doesn't want to use modifications
+    stop("Please provide an analysisId from phenotype QA", call. = FALSE)
+  }else{
+    cleaning <- phenoDTfile$modifications$pheno # extract outliers
+    cleaning <- cleaning[which(cleaning$analysisId %in% analysisId),]
+  }
   ###################################
   # loading the dataset
   mydata <- phenoDTfile$data$pheno # extract relevant data for sta
+  mydata[as.numeric(cleaning$row),]<-NA
   originalColumns <- colnames(mydata)
   myped <- phenoDTfile$data$pedigree
   ### change column names for mapping
@@ -67,13 +74,7 @@ resMod <- function(
     }else{mydata$mother <- NA; mydata$father <- NA}
   }else{mydata$mother <- NA; mydata$father <- NA}
   # move the genotype columns to factor
-
-  if(is.null(analysisId)){ # user doesn't want to use modifications
-    stop("Please provide an analysisId from phenotype QA", call. = FALSE)
-  }else{
-    cleaning <- phenoDTfile$modifications$pheno # extract outliers
-    cleaning <- cleaning[which(cleaning$analysisId %in% analysisId),]
-  }
+  
   # remove traits that are not actually present in the dataset
   traitToRemove <- character()
   for(k in 1:length(trait)){
@@ -90,16 +91,7 @@ resMod <- function(
   numericTraits <- which(traitTypes %in% c("numeric","integer"))
   if(length(numericTraits)==0){stop("None of the traits specified are numeric in nature. Please double check", call. = FALSE)}
   trait <- trait[numericTraits]
-  
-  # check if experimental design factor filtering is done
-  if(nrow(cleaning[which(cleaning$module == "qaDesign"),] > 0)){
-    cleaningSubDes <- cleaning[which(cleaning$trait %in% c("rep","iBlock")),]
-    
-    for (iDes in unique(cleaningSubDes$trait)){
-      outDes <- which(mydata$rowindex %in% cleaningSubDes[which(cleaningSubDes$trait == iDes), "row"])
-      mydata[outDes,iDes] <- NA
-    }
-  }
+   
   
   if(addRes==TRUE){
     modifications <- phenoDTfile$modifications$pheno
@@ -107,12 +99,7 @@ resMod <- function(
     idQa <- idQa[length(idQa)]
     idQaType <- phenoDTfile$status[phenoDTfile$status$analysisId == idQa, "module"]
     modifications <- modifications[which( modifications$analysisId == idQa & modifications$module == idQaType),]
-    traitsBoxplot <- unique(modifications[which( modifications$analysisId == idQa),"trait"])
-    for(iTrait in traitsBoxplot){#iTrait=traitsBoxplot[1]
-      if(nrow(modifications) > 0){
-        mydata[which(mydata$rowindex %in% unique(modifications$row[which(modifications$trait == iTrait)])),iTrait]=NA
-      }
-    }
+    mydata[as.numeric(modifications$row),]<-NA
   }
   #####################################
   # single trial analysis
