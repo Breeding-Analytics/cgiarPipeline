@@ -7,7 +7,7 @@ export(
        staLMM, metLMM, metLMMsolver, mtaLmmFlex, indexDesire, baseIndex, ocs, gpcp, rggMackay, rggPiepho, pgg,
        singleCrossMat, nasaPowerExtraction, summaryWeather, metASREML, funchunt, report_stats,
        numberFounders, individualVerification, markerAssistedSelection,
-       gwas, manhattanPlot, freeFunction, premetLMMsolver, postmetLMMsolver,
+       gwas, manhattanPlot, freeFunction, premetLMMsolver, postmetLMMsolver, resMod, pplotmod,
 
        # --- ProdAdv (pam_selection.R) ---
        runInitialProdAdv,
