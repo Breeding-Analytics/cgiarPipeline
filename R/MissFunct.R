@@ -202,7 +202,7 @@ missing_by_environment_trait <- function(data,
   )
   
   result$pct_missing <-
-    result$pct_missing * 100
+    round(result$pct_missing * 100,4)
   
   result[, c(
     "environment",
@@ -258,7 +258,7 @@ missing_by_design <- function(data,
     ] <- "pct_missing"
     
     summary$pct_missing <-
-      summary$pct_missing * 100
+      round(summary$pct_missing * 100,4)
     
     summary$trait <- trait
     
@@ -400,9 +400,7 @@ trait_missingness <- function(data,
   )
   
   result$pct_missing <-
-    100 *
-    result$n_missing /
-    result$n_total
+    round(100 * result$n_missing / result$n_total,4)
   
   result$status <- ifelse(
     result$pct_missing >= 30,
