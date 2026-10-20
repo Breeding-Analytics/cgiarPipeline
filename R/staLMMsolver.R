@@ -183,6 +183,7 @@ staLMM <- function(
       for(iEd in c("environment","trial","row","col","rowDes","colDes","rep","iBlock")){
         if(iEd %in% c("rowDes","colDes")){mydataSub[,iEd] <- as.numeric(mydataSub[,iEd])}
         if(iEd %in% c("row","col")){mydataSub[,iEd] <- as.numeric(mydataSub[,iEd])}
+        mydataSub[, paste0(iEd, "F")] <- as.factor(mydataSub[, iEd])
       }
         
       for(iName in c("designation","mother","father")){
