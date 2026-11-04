@@ -139,17 +139,18 @@ individualVerification <- function(
   ## now build the marker matrices for mother, fathers and progeny
   Markers <- Matrix::Matrix(data.matrix(Markers), sparse = TRUE)
   # mother matrix
-  Zfem <- Matrix::sparse.model.matrix(~Var1-1, data=cross_filt)
-  colnames(Zfem) <- gsub("Var1","",colnames(Zfem))
-  Mfem <- Zfem %*% Markers[rownames(Markers) %in% unique(cross_filt$Var1),]
+  # fac2sparse (unlike sparse.model.matrix) also works when there is a single level
+  Zfem <- Matrix::t(Matrix::fac2sparse(cross_filt$Var1, drop.unused.levels = FALSE))
+  colnames(Zfem) <- levels(cross_filt$Var1)
+  Mfem <- Zfem %*% Markers[rownames(Markers) %in% unique(cross_filt$Var1), , drop = FALSE]
   # father matrix
-  Zmal <- Matrix::sparse.model.matrix(~Var2-1, data=cross_filt)
-  colnames(Zmal) <- gsub("Var2","",colnames(Zmal))
-  Mmal <- Zmal %*% Markers[rownames(Markers) %in% unique(cross_filt$Var2),]
+  Zmal <- Matrix::t(Matrix::fac2sparse(cross_filt$Var2, drop.unused.levels = FALSE))
+  colnames(Zmal) <- levels(cross_filt$Var2)
+  Mmal <- Zmal %*% Markers[rownames(Markers) %in% unique(cross_filt$Var2), , drop = FALSE]
   # progeny matrix
-  Zpro <- Matrix::sparse.model.matrix(~hybrid-1, data=cross_filt)
-  colnames(Zpro) <- gsub("hybrid","",colnames(Zpro))
-  Mpro <- Zpro %*% Markers[rownames(Markers) %in% unique(cross_filt$hybrid),]
+  Zpro <- Matrix::t(Matrix::fac2sparse(cross_filt$hybrid, drop.unused.levels = FALSE))
+  colnames(Zpro) <- levels(cross_filt$hybrid)
+  Mpro <- Zpro %*% Markers[rownames(Markers) %in% unique(cross_filt$hybrid), , drop = FALSE]
   rownames(Mpro) <- cross_filt$hybrid
   # expected progeny matrix
   Mexpec <- Matrix::Matrix(0, nrow=nrow(cross_filt), ncol=ncol(Markers))
