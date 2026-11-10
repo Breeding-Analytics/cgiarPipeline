@@ -8,7 +8,9 @@ individualVerification <- function(
   sc_filter = NULL,
   het = NULL,
   matchThres = NULL,
-  onlyMats=FALSE
+  onlyMats=FALSE,
+  callError = 0.01,
+  selfBoundary = 70
 ){
 
   analysisId <- as.numeric(Sys.time())
@@ -25,6 +27,9 @@ individualVerification <- function(
         qas <- cgiarBase::resolveGenoStamp(object$data$geno_imp, analysisIdForGenoModifications)
         if(length(qas) == 0){stop("The genotype QA/QC Id ", paste(analysisIdForGenoModifications, collapse=", "), " was not found in geno_imp. Please verify you selected the correct Genotype QA/QC version.", call. = FALSE)}
         if(length(qas) > 1){stop("The genotype QA/QC Id ", paste(analysisIdForGenoModifications, collapse=", "), " resolves to more than one entry in geno_imp. This function uses a single marker matrix, so please select one version.", call. = FALSE)}
+        # F1 QA/QC handles missing calls itself; imputed calls would be scored as if they were observed
+        impLog <- object$modifications$geno_imp[[qas]]
+        if(!is.null(impLog) && any(!is.na(unlist(impLog)))){stop("The selected genotype QA/QC version was imputed. F1 QA/QC handles missing data itself: please re-run Genotype QA/QC with 'Skip imputation' and select that version.", call. = FALSE)}
         Markers <- as.data.frame(object$data$geno_imp[[qas]])
         colnames(Markers) = adegenet::locNames(object$data$geno_imp[[qas]])
   }	 
@@ -139,17 +144,18 @@ individualVerification <- function(
   ## now build the marker matrices for mother, fathers and progeny
   Markers <- Matrix::Matrix(data.matrix(Markers), sparse = TRUE)
   # mother matrix
-  Zfem <- Matrix::sparse.model.matrix(~Var1-1, data=cross_filt)
-  colnames(Zfem) <- gsub("Var1","",colnames(Zfem))
-  Mfem <- Zfem %*% Markers[rownames(Markers) %in% unique(cross_filt$Var1),]
+  # fac2sparse (unlike sparse.model.matrix) also works when there is a single level
+  Zfem <- Matrix::t(Matrix::fac2sparse(cross_filt$Var1, drop.unused.levels = FALSE))
+  colnames(Zfem) <- levels(cross_filt$Var1)
+  Mfem <- Zfem %*% Markers[rownames(Markers) %in% unique(cross_filt$Var1), , drop = FALSE]
   # father matrix
-  Zmal <- Matrix::sparse.model.matrix(~Var2-1, data=cross_filt)
-  colnames(Zmal) <- gsub("Var2","",colnames(Zmal))
-  Mmal <- Zmal %*% Markers[rownames(Markers) %in% unique(cross_filt$Var2),]
+  Zmal <- Matrix::t(Matrix::fac2sparse(cross_filt$Var2, drop.unused.levels = FALSE))
+  colnames(Zmal) <- levels(cross_filt$Var2)
+  Mmal <- Zmal %*% Markers[rownames(Markers) %in% unique(cross_filt$Var2), , drop = FALSE]
   # progeny matrix
-  Zpro <- Matrix::sparse.model.matrix(~hybrid-1, data=cross_filt)
-  colnames(Zpro) <- gsub("hybrid","",colnames(Zpro))
-  Mpro <- Zpro %*% Markers[rownames(Markers) %in% unique(cross_filt$hybrid),]
+  Zpro <- Matrix::t(Matrix::fac2sparse(cross_filt$hybrid, drop.unused.levels = FALSE))
+  colnames(Zpro) <- levels(cross_filt$hybrid)
+  Mpro <- Zpro %*% Markers[rownames(Markers) %in% unique(cross_filt$hybrid), , drop = FALSE]
   rownames(Mpro) <- cross_filt$hybrid
   # expected progeny matrix
   Mexpec <- Matrix::Matrix(0, nrow=nrow(cross_filt), ncol=ncol(Markers))
@@ -169,7 +175,9 @@ individualVerification <- function(
                                 Mexp=Mexpec,
                                 ploidy=ploidy,
                                 sc_filter = sc_filter,
-                                het=het)
+                                het=het,
+                                callError = callError,
+                                selfBoundary = selfBoundary)
   
   if(onlyMats){
     return(res)
@@ -179,9 +187,9 @@ individualVerification <- function(
   newStatus <- data.frame(module="gVerif", analysisId=analysisId, analysisIdName=NA)
   object$status <- rbind( object$status, newStatus[,colnames(object$status)])
   ## modeling
-  modeling <- data.frame(module="gVerif",  analysisId=analysisId, trait=c(rep("none",length(colsForExpecGeno)+length(het)+2+length(markersToBeUsed) ),"inputObject"), environment="general",
-                         parameter= c(rep("expectedGenoColumn",length(colsForExpecGeno)),"ParentMaxHetThresh", "UpperMatchProbThres","LowerMatchProbThres",rep("markerUsed",length(markersToBeUsed)), "analysisId"  ),
-                         value= c(colsForExpecGeno,het,matchThres[1],matchThres[3],markersToBeUsed,analysisIdForGenoModifications ))
+  modeling <- data.frame(module="gVerif",  analysisId=analysisId, trait=c(rep("none",length(colsForExpecGeno)+length(het)+4+length(markersToBeUsed) ),"inputObject"), environment="general",
+                         parameter= c(rep("expectedGenoColumn",length(colsForExpecGeno)),"ParentMaxHetThresh", "UpperMatchProbThres","LowerMatchProbThres","OffspringCallError","SelfEvidenceBoundary",rep("markerUsed",length(markersToBeUsed)), "analysisId"  ),
+                         value= c(colsForExpecGeno,het,matchThres[1],matchThres[3],callError,selfBoundary,markersToBeUsed,analysisIdForGenoModifications ))
   if(is.null(object$modeling)){
     object$modeling <-  modeling
   }else{
@@ -210,7 +218,8 @@ individualVerification <- function(
   #Filters
   het_filter = (het_pct_fem <= het & het_pct_mal <= het)
   
-  indivMatchedN = length(which(het_filter & res$metricsInd$probMatch >= matchThres[1]))
+  # final GOOD: probMatch at/above the upper threshold AND self evidence supports the F1 (see cgiarBase::selfEvidenceStatus)
+  indivMatchedN = length(which(het_filter & res$metricsInd$probMatch >= matchThres[1] & res$metricsInd$selfEvidence == -1))
   indivUnmatchedN = nrow(cross_filt) - indivMatchedN
   object$metrics <- rbind(object$metrics,
                                data.frame(module="gVerif",analysisId=analysisId, trait="none", environment="general",
