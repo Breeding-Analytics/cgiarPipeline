@@ -20,7 +20,6 @@ if(is.null(analysisId)){ # user doesn't want to use modifications
   ###################################
   # loading the dataset
   mydata <- phenoDTfile$data$pheno # extract relevant data for sta
-  mydata[as.numeric(cleaning$row),]<-NA
   originalColumns <- colnames(mydata)
   myped <- phenoDTfile$data$pedigree
   ### change column names for mapping
@@ -93,13 +92,30 @@ if(is.null(analysisId)){ # user doesn't want to use modifications
   trait <- trait[numericTraits]
    
   
+  # check if experimental design factor filtering is done (blank only the flagged design column)
+  if(nrow(cleaning[which(cleaning$module == "qaDesign"),]) > 0){
+    cleaningSubDes <- cleaning[which(cleaning$trait %in% c("rep","iBlock")),]
+    for (iDes in unique(cleaningSubDes$trait)){
+      outDes <- which(mydata$rowindex %in% cleaningSubDes[which(cleaningSubDes$trait == iDes), "row"])
+      mydata[outDes,iDes] <- NA
+    }
+  }
+  # stamps whose outliers are removed: the ones given in analysisId plus, when
+  # addRes=TRUE, the latest model-based QA (qaMb) stamp if one exists
   if(addRes==TRUE){
-    modifications <- phenoDTfile$modifications$pheno
-    idQa <- phenoDTfile$status[which(phenoDTfile$status$module %in% c("qaMb")),"analysisId"];
-    idQa <- idQa[length(idQa)]
-    idQaType <- phenoDTfile$status[phenoDTfile$status$analysisId == idQa, "module"]
-    modifications <- modifications[which( modifications$analysisId == idQa & modifications$module == idQaType),]
-    mydata[as.numeric(modifications$row),]<-NA
+    idQa <- phenoDTfile$status[which(phenoDTfile$status$module %in% c("qaMb")),"analysisId"]
+    if(length(idQa) > 0){
+      idQa <- idQa[length(idQa)]
+      modifications <- phenoDTfile$modifications$pheno
+      cleaning <- modifications[which(modifications$analysisId %in% c(analysisId, idQa)),]
+    }
+  }
+  # remove outliers per trait: only the flagged trait value is set to NA, the rest of the plot is kept
+  for(iTrait in trait){
+    outRows <- unique(cleaning$row[which(cleaning$trait == iTrait)])
+    if(length(outRows) > 0){
+      mydata[which(mydata$rowindex %in% outRows), iTrait] <- NA
+    }
   }
   #####################################
   # single occurrence analysis

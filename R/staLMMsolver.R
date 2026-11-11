@@ -45,20 +45,14 @@ staLMM <- function(
     colnames(provMet) <- c("module" ,     "analysisId" , "analysisIdName" )
     phenoDTfile$status <- provMet# data.frame(module="soa", analysisId=staAnalysisId, analysisIdName=NA)
   }
- ## latest qaMb stamp available in the object
- latestMbId <- phenoDTfile$status$analysisId[which(phenoDTfile$status$module == "qaMb")]
- if(length(latestMbId) == 0) {latestMbId<-return(NULL)}else{ latestMbId<-latestMbId[length(latestMbId)] }
-    
-  if(is.null(analysisId) | is.null(latestMbId)){ # user doesn't want to use modifications
-    stop("Please provide an analysisId from phenotype QA", call. = FALSE)
-  }else{
-    cleaningQA <- phenoDTfile$modifications$pheno # extract outliers
-    cleaningQA <- cleaningQA[which(cleaningQA$analysisId %in% c(analysisId,latestMbId)),]
-  }
+  ## latest model-based QA (qaMb) stamp, if any. It is optional: STA can run right
+  ## after phenotype QA (no qaMb yet) or after model-based QA. When present, its
+  ## outliers are removed per trait together with the stamps given in analysisId.
+  latestMbId <- phenoDTfile$status$analysisId[which(phenoDTfile$status$module == "qaMb")]
+  latestMbId <- if(length(latestMbId) > 0){ latestMbId[length(latestMbId)] }else{ NULL }
   ###################################
   # loading the dataset
   mydata <- phenoDTfile$data$pheno # extract relevant data for sta
-  mydata[as.numeric(cleaningQA$row),]<-NA
   originalColumns <- colnames(mydata)
   myped <- phenoDTfile$data$pedigree
   ### change column names for mapping
@@ -132,7 +126,8 @@ staLMM <- function(
     stop("Please provide an analysisId from phenotype QA", call. = FALSE)
   }else{
     cleaning <- phenoDTfile$modifications$pheno # extract outliers
-    cleaning <- cleaning[which(cleaning$analysisId %in% analysisId),]
+    # selected QA stamps plus the latest model-based QA stamp (if any); applied per trait below
+    cleaning <- cleaning[which(cleaning$analysisId %in% c(analysisId, latestMbId)),]
   }
   # remove traits that are not actually present in the dataset
   traitToRemove <- character()
