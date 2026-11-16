@@ -1027,7 +1027,7 @@ runInitialProdAdv <- function(analysisId = as.numeric(Sys.time()),
   status <- data.frame(
     module = "Init_prodAdv",
     analysisId = analysisId,
-    analysisIdName = analysisIdName,
+    analysisIdName = if (is.null(analysisIdName) || !nzchar(analysisIdName)) NA_character_ else analysisIdName,
     stringsAsFactors = FALSE
   )
 
