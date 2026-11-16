@@ -47,6 +47,9 @@ ocs <- function(
 
   if( phenoDTfile$status[phenoDTfile$status$analysisId == analysisId,"module"] == "indexD"){
     otherTraits <- setdiff( unique(phenoDTfile$modeling[phenoDTfile$modeling$analysisId == analysisId, "trait"]), c("inputObject","general"))
+    # the index stores its traits as "<trait>_scaled" in the modeling table, but the predictions it was built from
+    # (and the values reported here) are on the original scale, so drop the suffix to find them and to name them
+    otherTraits <- unique(sub("_scaled$", "", otherTraits))
     analysisIdOtherTraits <- phenoDTfile$modeling[phenoDTfile$modeling$analysisId == analysisId & phenoDTfile$modeling$trait == "inputObject", "value"]
   }else{
     otherTraits <- setdiff(unique(mydata$trait), trait)
@@ -176,6 +179,9 @@ ocs <- function(
         }
         provPredictions <- provPredictions[which(provPredictions$trait == iTrait), ]
         provPredictions <- provPredictions[which(provPredictions[,"designation"] %in% common),]
+        if(nrow(provPredictions) == 0){
+          warning(paste0("No predictions found for trait '", iTrait, "' in the analysis used to build the index; its cross values will be NA."), call. = FALSE)
+        }
         ebv2 <- data.frame(provPredictions[,c("predictedValue")]); rownames(ebv2) <- provPredictions[,"designation"]
         eMPtrait = (ebv2[crossPlan[ ,1],] +  ebv2[crossPlan[ ,2],])/2
 
