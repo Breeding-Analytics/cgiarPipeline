@@ -9,4 +9,5 @@ Description: Software for analytical pipelines
 Depends: R (>= 3.5.0), Matrix (>= 1.1.1)
 License: GPL (>= 2)
 Imports: stats, graphics, grDevices, poolr, corehunter, magrittr
-Suggests: parallel, LMMsolver, sommer, RSpectra, pedigreemm
+Suggests: parallel, LMMsolver, sommer (>= 4.5.25), RSpectra, pedigreemm, cgiarBase, testthat (>= 3.0.0)
+Config/testthat/edition: 3

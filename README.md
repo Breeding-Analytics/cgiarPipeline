@@ -86,6 +86,26 @@ to add something or make a change as
 # git clone https://github.com/Breeding-Analytics/cgiarPipeline.git
 ```
 
+## Multi-environment analysis with sommer
+
+`metSommer()` provides the list-based model interface used by `metASREML()`
+without requiring an ASReml license. Install sommer >= 4.5.25 and this version
+of cgiarPipeline before using the sommer tab in bioflow.
+
+```r
+# Main + environment-specific genetic variance
+# fit <- metSommer(result, analysisId = soa_stamp, trait = "Yield_Mg_ha",
+#   fixedTerm = list("environment"),
+#   randomTerm = list("designation", c("designation", "environment")),
+#   covMod = list("none", c("none", "Structure model_diag")))
+```
+
+The function supports weighted REML, Gaussian/binomial/Gamma/Poisson families
+(non-Gaussian fits use PQL), FA and unstructured covariance, random regressions,
+marker/pedigree/weather kernels, parental GCA/SCA, and configured TPP traits.
+Results are appended under `moaSommer` and can be used by `indexDesire()`.
+See `?metSommer` for weighting, prediction-scale and filtering conventions.
+
 ## Contribution process
 
 In this collaborative development model, anyone can fork an existing
